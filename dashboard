@@ -1,0 +1,107 @@
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { reportsApi } from "../services/endpoints";
+import { useAuth } from "../hooks/useAuth.jsx";
+import { Card, ErrorText } from "../components/ui.jsx";
+
+const money = (n) =>
+  new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(n || 0);
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+export default function Dashboard() {
+  const { user } = useAuth();
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    reportsApi.dashboard().then((r) => setData(r.data)).catch(setError);
+  }, []);
+
+  if (error) return <ErrorText error={error} />;
+  if (!data) return <div className="center muted">Loading dashboard...</div>;
+
+  return (
+    <div>
+      <p className="muted" style={{ marginBottom: 2 }}>
+        {greeting()}, {user?.first_name || user?.username}
+      </p>
+      <h2 style={{ fontSize: 26, marginBottom: 4 }}>LTI / LNI Portal</h2>
+      <hr className="login-divider" />
+
+      <div className="stat-grid">
+        <div className="stat">
+          <div className="stat-label">Total Proposals</div>
+          <div className="stat-value">{data.proposals_total}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">In Progress</div>
+          <div className="stat-value">{data.proposals_pending}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">Completed</div>
+          <div className="stat-value">{data.proposals_completed}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">Total Disbursed</div>
+          <div className="stat-value">₹{money(data.total_disbursed)}</div>
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <Card title="Limit Utilisation">
+          <table className="table">
+            <thead>
+              <tr><th>Metric</th><th className="num">Amount</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Approved</td><td className="num">{money(data.limits.approved)}</td></tr>
+              <tr><td>Outstanding</td><td className="num">{money(data.limits.outstanding)}</td></tr>
+              <tr><td>Available</td><td className="num">{money(data.limits.available)}</td></tr>
+            </tbody>
+          </table>
+        </Card>
+        <Card title="Proposals by Stage">
+          <table className="table">
+            <thead>
+              <tr><th>Stage</th><th className="num">Count</th></tr>
+            </thead>
+            <tbody>
+              {Object.entries(data.proposals_by_state).map(([state, count]) => (
+                <tr key={state}>
+                  <td>{state}</td>
+                  <td className="num">{count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      </div>
+
+      <h3 style={{ marginTop: 8, marginBottom: 12 }}>Quick Actions</h3>
+      <div className="stat-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+        <Link to="/proposals/new" className="stat" style={{ textDecoration: "none", color: "inherit" }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>New Proposal →</div>
+          <div className="muted small">Create investment proposal</div>
+        </Link>
+        <Link to="/proposals" className="stat" style={{ textDecoration: "none", color: "inherit" }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>View Proposals →</div>
+          <div className="muted small">Track all proposals</div>
+        </Link>
+        <Link to="/limits" className="stat" style={{ textDecoration: "none", color: "inherit" }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>Investment Limits →</div>
+          <div className="muted small">Limit utilisation</div>
+        </Link>
+        <Link to="/reports" className="stat" style={{ textDecoration: "none", color: "inherit" }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>Export Reports →</div>
+          <div className="muted small">Download Excel reports</div>
+        </Link>
+      </div>
+    </div>
+  );
+}
