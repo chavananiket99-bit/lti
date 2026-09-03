@@ -1,0 +1,158 @@
+import { useEffect, useState } from "react";
+import { mastersApi } from "../services/endpoints";
+import { useAuth } from "../hooks/useAuth.jsx";
+import { Card, ErrorText, Field } from "../components/ui.jsx";
+
+const money = (n) => Number(n || 0).toLocaleString("en-IN");
+
+export default function Limits() {
+  const { isAdmin } = useAuth();
+  const [limits, setLimits] = useState([]);
+  const [error, setError] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [masters, setMasters] = useState({ companies: [], currencies: [], years: [] });
+
+  function load() {
+    mastersApi.limits().then((r) => setLimits(r.data.results || r.data)).catch(setError);
+  }
+
+  useEffect(() => {
+    load();
+    if (isAdmin()) {
+      Promise.all([
+        mastersApi.companies(),
+        mastersApi.currencies(),
+        mastersApi.financialYears(),
+      ]).then(([c, cur, y]) =>
+        setMasters({
+          companies: c.data.results || c.data,
+          currencies: cur.data.results || cur.data,
+          years: y.data.results || y.data,
+        })
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div>
+      <div className="page-head">
+        <h2>Investment Limits</h2>
+        {isAdmin() && (
+          <button className="btn btn-success" onClick={() => setEditing({})}>+ Add Limit</button>
+        )}
+      </div>
+      <ErrorText error={error} />
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Company</th><th>FY</th><th>Type</th><th>Currency</th>
+            <th className="num">Approved</th><th className="num">Outstanding</th>
+            <th className="num">Available</th>
+            {isAdmin() && <th></th>}
+          </tr>
+        </thead>
+        <tbody>
+          {limits.map((l) => (
+            <tr key={l.id}>
+              <td>{l.company_name}</td>
+              <td>{l.financial_year_code}</td>
+              <td>{l.limit_type_display}</td>
+              <td>{l.currency_code}</td>
+              <td className="num">{money(l.investment_approved)}</td>
+              <td className="num">{money(l.current_outstanding)}</td>
+              <td className="num">{money(l.balance_available)}</td>
+              {isAdmin() && (
+                <td>
+                  <button className="btn btn-light btn-sm" onClick={() => setEditing(l)}>Edit</button>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {editing && (
+        <LimitForm
+          limit={editing}
+          masters={masters}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function LimitForm({ limit, masters, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    company: limit.company || "",
+    financial_year: limit.financial_year || "",
+    currency: limit.currency || "",
+    limit_type: limit.limit_type || "FUNGIBLE",
+    investment_approved: limit.investment_approved || "",
+    current_outstanding: limit.current_outstanding || "0",
+    is_active: limit.is_active ?? true,
+  });
+  const [error, setError] = useState(null);
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  async function save() {
+    setError(null);
+    try {
+      await mastersApi.saveLimit(form, limit.id);
+      onSaved();
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <Card title={limit.id ? "Edit Limit" : "Add Limit"}>
+          <Field label="Company">
+            <select value={form.company} onChange={set("company")}>
+              <option value="">Select</option>
+              {masters.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Financial Year">
+            <select value={form.financial_year} onChange={set("financial_year")}>
+              <option value="">Select</option>
+              {masters.years.map((y) => <option key={y.id} value={y.id}>{y.code}</option>)}
+            </select>
+          </Field>
+          <Field label="Currency">
+            <select value={form.currency} onChange={set("currency")}>
+              <option value="">Select</option>
+              {masters.currencies.map((c) => <option key={c.id} value={c.id}>{c.code}</option>)}
+            </select>
+          </Field>
+          <Field label="Limit Type">
+            <select value={form.limit_type} onChange={set("limit_type")}>
+              <option value="FUNGIBLE">Fungible</option>
+              <option value="NON_FUNGIBLE">Non-Fungible</option>
+              <option value="SURPLUS">Surplus</option>
+              <option value="TEMPORARY">Temporary</option>
+            </select>
+          </Field>
+          <Field label="Investment Approved">
+            <input type="number" step="0.01" value={form.investment_approved} onChange={set("investment_approved")} />
+          </Field>
+          <Field label="Current Outstanding">
+            <input type="number" step="0.01" value={form.current_outstanding} onChange={set("current_outstanding")} />
+          </Field>
+          <ErrorText error={error} />
+          <div className="btn-row">
+            <button className="btn btn-primary" onClick={save}>Save</button>
+            <button className="btn btn-light" onClick={onClose}>Cancel</button>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
