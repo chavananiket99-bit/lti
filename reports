@@ -1,0 +1,54 @@
+import { useState } from "react";
+import api from "../services/api";
+import { Card, ErrorText } from "../components/ui.jsx";
+
+const REPORTS = [
+  { kind: "investment", label: "Investment Report", file: "investment_report.xlsx" },
+  { kind: "disbursement", label: "Disbursement Report", file: "disbursement_report.xlsx" },
+  { kind: "limit-utilization", label: "Limit Utilisation Report", file: "limit_utilization_report.xlsx" },
+];
+
+export default function Reports() {
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState("");
+
+  // Exports are protected endpoints, so download as an authenticated blob.
+  async function download(kind, file) {
+    setBusy(kind);
+    setError(null);
+    try {
+      const res = await api.get(`/reports/${kind}/export/`, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div>
+      <h2>Reports</h2>
+      <p className="muted">Export standard reports to Excel (BRD Sec 6 - Reporting &amp; Audit).</p>
+      <ErrorText error={error} />
+      <div className="grid-2">
+        {REPORTS.map((r) => (
+          <Card key={r.kind} title={r.label}>
+            <button
+              className="btn btn-primary"
+              disabled={busy === r.kind}
+              onClick={() => download(r.kind, r.file)}
+            >
+              {busy === r.kind ? "Preparing..." : "Download Excel"}
+            </button>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
