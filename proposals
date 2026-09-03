@@ -1,0 +1,85 @@
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { proposalsApi } from "../services/endpoints";
+import { useAuth } from "../hooks/useAuth.jsx";
+import { StateBadge, ErrorText } from "../components/ui.jsx";
+
+export default function Proposals() {
+  const { hasRole, isAdmin } = useAuth();
+  const [items, setItems] = useState([]);
+  const [error, setError] = useState(null);
+  const [search, setSearch] = useState("");
+
+  function load() {
+    proposalsApi
+      .list({ search })
+      .then((r) => setItems(r.data.results || r.data))
+      .catch(setError);
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
+  const canCreate = isAdmin() || hasRole("GROUP_ENTITY_USER");
+
+  return (
+    <div>
+      <div className="page-head">
+        <h2>Investment Proposals</h2>
+        {canCreate && (
+          <Link className="btn btn-success" to="/proposals/new">
+            + New Proposal
+          </Link>
+        )}
+      </div>
+      <input
+        className="search"
+        placeholder="Search reference / counterparty..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <ErrorText error={error} />
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Reference</th>
+            <th>Company</th>
+            <th>Type</th>
+            <th>Counterparty</th>
+            <th className="num">Amount</th>
+            <th>Stage</th>
+            <th>Created By</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((p) => (
+            <tr key={p.id}>
+              <td>{p.reference_no}</td>
+              <td>{p.company_name}</td>
+              <td>{p.investment_type_name}</td>
+              <td>{p.counterparty}</td>
+              <td className="num">
+                {p.currency_code} {Number(p.amount).toLocaleString("en-IN")}
+              </td>
+              <td><StateBadge state={p.current_state} label={p.state_display} /></td>
+              <td>{p.created_by_name}</td>
+              <td>
+                <Link className="btn btn-light btn-sm" to={`/proposals/${p.id}`}>
+                  Open
+                </Link>
+              </td>
+            </tr>
+          ))}
+          {items.length === 0 && (
+            <tr>
+              <td colSpan={8} className="muted center">No proposals found.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
