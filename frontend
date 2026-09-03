@@ -1,0 +1,1703 @@
+//frontend / src / components / Layout.jsx
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth.jsx";
+
+function getInitials(user) {
+  if (user?.first_name && user?.last_name)
+    return (user.first_name[0] + user.last_name[0]).toUpperCase();
+  if (user?.full_name) {
+    const parts = user.full_name.trim().split(/\s+/);
+    return parts.length > 1
+      ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+      : parts[0].slice(0, 2).toUpperCase();
+  }
+  return (user?.username || "U").slice(0, 2).toUpperCase();
+}
+
+export default function Layout() {
+  const { user, logout, isAdmin } = useAuth();
+  const navigate = useNavigate();
+
+  const nav = [
+    { to: "/", label: "Dashboard", end: true },
+    { to: "/proposals", label: "Proposals" },
+    { to: "/limits", label: "Limits" },
+    { to: "/reports", label: "Reports" },
+    { to: "/audit", label: "Audit" },
+  ];
+  if (isAdmin()) nav.push({ to: "/users", label: "Admin" });
+
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div className="brand">LTI / Admin LNI Portal</div>
+        <nav>
+          {nav.map((n) => (
+            <NavLink key={n.to} to={n.to} end={n.end} className="nav-link">
+              {n.label}
+            </NavLink>
+          ))}
+        </nav>
+        <div className="topbar-right">
+          <div className="user-info">
+            <div>
+              <div className="user-name">{user?.full_name || user?.username}</div>
+              <span className="role-badge">{user?.role_name}</span>
+            </div>
+            <div className="avatar">{getInitials(user)}</div>
+          </div>
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={() => { logout(); navigate("/login"); }}
+          >
+            Logout
+          </button>
+        </div>
+      </header>
+      <main className="content">
+        <Outlet />
+      </main>
+      <footer className="footer">
+        &copy; {new Date().getFullYear()} LTI / LNI Portal &middot; Corporate Finance
+      </footer>
+    </div>
+  );
+}
+
+//frontend / src / components / ui.jsx
+// Small presentational helpers reused across pages.
+
+export function StateBadge({ state, label }) {
+  const cls = state === "COMPLETED" ? "badge badge-success"
+    : state === "DRAFT" ? "badge badge-muted"
+    : "badge badge-info";
+  return <span className={cls}>{label || state}</span>;
+}
+
+export function Field({ label, children }) {
+  return (
+    <label className="field">
+      <span className="field-label">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+export function Card({ title, actions, children }) {
+  return (
+    <section className="card">
+      {(title || actions) && (
+        <div className="card-head">
+          <h3>{title}</h3>
+          <div>{actions}</div>
+        </div>
+      )}
+      <div className="card-body">{children}</div>
+    </section>
+  );
+}
+
+export function ErrorText({ error }) {
+  if (!error) return null;
+  const msg =
+    error.response?.data?.error
+      ? JSON.stringify(error.response.data.error)
+      : error.response?.data?.detail || error.message || "Something went wrong";
+  return <div className="error-text">{msg}</div>;
+}
+
+//frontend / src / hooks / useAuth.jsx
+import { createContext, useContext, useEffect, useState } from "react";
+import { authApi } from "../services/endpoints";
+import { setTokens, clearTokens } from "../services/api";
+
+const AuthContext = createContext(null);
+
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState(() => {
+    const raw = localStorage.getItem("user");
+    return raw ? JSON.parse(raw) : null;
+  });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const access = localStorage.getItem("access");
+    if (access && !user) {
+      authApi
+        .profile()
+        .then((res) => saveUser(res.data))
+        .catch(() => logout())
+        .finally(() => setLoading(false));
+    } else {
+      setLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function saveUser(u) {
+    console.log("Saving user:", u);
+    setUser(u);
+    localStorage.setItem("user", JSON.stringify(u));
+  }
+
+  async function login(username, password) {
+    const { data } = await authApi.login(username, password);
+    setTokens(data.access, data.refresh);
+    saveUser(data.user);
+    return data.user;
+  }
+
+  function logout() {
+    clearTokens();
+    localStorage.removeItem("user");
+    setUser(null);
+  }
+
+  const hasRole = (...codes) => user && codes.includes(user.role_code);
+  const isAdmin = () =>
+    user && ["SYSTEM_ADMIN", "SUPER_ADMIN"].includes(user.role_code);
+
+  return (
+    <AuthContext.Provider value={{ user, loading, login, logout, hasRole, isAdmin }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export const useAuth = () => useContext(AuthContext);
+
+//frontend / src / pages / AuditLog.jsx
+import { useEffect, useState } from "react";
+import { auditApi } from "../services/endpoints";
+import { ErrorText } from "../components/ui.jsx";
+
+export default function AuditLog() {
+  const [logs, setLogs] = useState([]);
+  const [error, setError] = useState(null);
+  const [action, setAction] = useState("");
+
+  useEffect(() => {
+    auditApi
+      .list(action ? { action } : {})
+      .then((r) => setLogs(r.data.results || r.data))
+      .catch(setError);
+  }, [action]);
+
+  return (
+    <div>
+      <h2>Audit Trail</h2>
+      <select className="search" value={action} onChange={(e) => setAction(e.target.value)}>
+        <option value="">All actions</option>
+        {["LOGIN", "CREATE", "UPDATE", "SUBMIT", "APPROVE", "REJECT", "DISBURSE", "UPLOAD", "EXPORT"].map((a) => (
+          <option key={a} value={a}>{a}</option>
+        ))}
+      </select>
+      <ErrorText error={error} />
+      <table className="table">
+        <thead>
+          <tr><th>When</th><th>User</th><th>Action</th><th>Entity</th><th>Description</th><th>IP</th></tr>
+        </thead>
+        <tbody>
+          {logs.map((l) => (
+            <tr key={l.id}>
+              <td>{new Date(l.created_at).toLocaleString()}</td>
+              <td>{l.user_name || l.username || "-"}</td>
+              <td>{l.action}</td>
+              <td>{l.entity_type} {l.entity_id && `#${l.entity_id}`}</td>
+              <td>{l.description}</td>
+              <td>{l.ip_address}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+//frontend / src / pages / Dashboard.jsx
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { reportsApi } from "../services/endpoints";
+import { useAuth } from "../hooks/useAuth.jsx";
+import { Card, ErrorText } from "../components/ui.jsx";
+
+const money = (n) =>
+  new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(n || 0);
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+export default function Dashboard() {
+  const { user } = useAuth();
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    reportsApi.dashboard().then((r) => setData(r.data)).catch(setError);
+  }, []);
+
+  if (error) return <ErrorText error={error} />;
+  if (!data) return <div className="center muted">Loading dashboard...</div>;
+
+  return (
+    <div>
+      <p className="muted" style={{ marginBottom: 2 }}>
+        {greeting()}, {user?.first_name || user?.username}
+      </p>
+      <h2 style={{ fontSize: 26, marginBottom: 4 }}>LTI / LNI Portal</h2>
+      <hr className="login-divider" />
+
+      <div className="stat-grid">
+        <div className="stat">
+          <div className="stat-label">Total Proposals</div>
+          <div className="stat-value">{data.proposals_total}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">In Progress</div>
+          <div className="stat-value">{data.proposals_pending}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">Completed</div>
+          <div className="stat-value">{data.proposals_completed}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">Total Disbursed</div>
+          <div className="stat-value">₹{money(data.total_disbursed)}</div>
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <Card title="Limit Utilisation">
+          <table className="table">
+            <thead>
+              <tr><th>Metric</th><th className="num">Amount</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Approved</td><td className="num">{money(data.limits.approved)}</td></tr>
+              <tr><td>Outstanding</td><td className="num">{money(data.limits.outstanding)}</td></tr>
+              <tr><td>Available</td><td className="num">{money(data.limits.available)}</td></tr>
+            </tbody>
+          </table>
+        </Card>
+        <Card title="Proposals by Stage">
+          <table className="table">
+            <thead>
+              <tr><th>Stage</th><th className="num">Count</th></tr>
+            </thead>
+            <tbody>
+              {Object.entries(data.proposals_by_state).map(([state, count]) => (
+                <tr key={state}>
+                  <td>{state}</td>
+                  <td className="num">{count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      </div>
+
+      <h3 style={{ marginTop: 8, marginBottom: 12 }}>Quick Actions</h3>
+      <div className="stat-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+        <Link to="/proposals/new" className="stat" style={{ textDecoration: "none", color: "inherit" }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>New Proposal →</div>
+          <div className="muted small">Create investment proposal</div>
+        </Link>
+        <Link to="/proposals" className="stat" style={{ textDecoration: "none", color: "inherit" }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>View Proposals →</div>
+          <div className="muted small">Track all proposals</div>
+        </Link>
+        <Link to="/limits" className="stat" style={{ textDecoration: "none", color: "inherit" }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>Investment Limits →</div>
+          <div className="muted small">Limit utilisation</div>
+        </Link>
+        <Link to="/reports" className="stat" style={{ textDecoration: "none", color: "inherit" }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>Export Reports →</div>
+          <div className="muted small">Download Excel reports</div>
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+//frontend / src / pages / Limits.jsx
+import { useEffect, useState } from "react";
+import { mastersApi } from "../services/endpoints";
+import { useAuth } from "../hooks/useAuth.jsx";
+import { Card, ErrorText, Field } from "../components/ui.jsx";
+
+const money = (n) => Number(n || 0).toLocaleString("en-IN");
+
+export default function Limits() {
+  const { isAdmin } = useAuth();
+  const [limits, setLimits] = useState([]);
+  const [error, setError] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [masters, setMasters] = useState({ companies: [], currencies: [], years: [] });
+
+  function load() {
+    mastersApi.limits().then((r) => setLimits(r.data.results || r.data)).catch(setError);
+  }
+
+  useEffect(() => {
+    load();
+    if (isAdmin()) {
+      Promise.all([
+        mastersApi.companies(),
+        mastersApi.currencies(),
+        mastersApi.financialYears(),
+      ]).then(([c, cur, y]) =>
+        setMasters({
+          companies: c.data.results || c.data,
+          currencies: cur.data.results || cur.data,
+          years: y.data.results || y.data,
+        })
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div>
+      <div className="page-head">
+        <h2>Investment Limits</h2>
+        {isAdmin() && (
+          <button className="btn btn-success" onClick={() => setEditing({})}>+ Add Limit</button>
+        )}
+      </div>
+      <ErrorText error={error} />
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Company</th><th>FY</th><th>Type</th><th>Currency</th>
+            <th className="num">Approved</th><th className="num">Outstanding</th>
+            <th className="num">Available</th>
+            {isAdmin() && <th></th>}
+          </tr>
+        </thead>
+        <tbody>
+          {limits.map((l) => (
+            <tr key={l.id}>
+              <td>{l.company_name}</td>
+              <td>{l.financial_year_code}</td>
+              <td>{l.limit_type_display}</td>
+              <td>{l.currency_code}</td>
+              <td className="num">{money(l.investment_approved)}</td>
+              <td className="num">{money(l.current_outstanding)}</td>
+              <td className="num">{money(l.balance_available)}</td>
+              {isAdmin() && (
+                <td>
+                  <button className="btn btn-light btn-sm" onClick={() => setEditing(l)}>Edit</button>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {editing && (
+        <LimitForm
+          limit={editing}
+          masters={masters}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function LimitForm({ limit, masters, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    company: limit.company || "",
+    financial_year: limit.financial_year || "",
+    currency: limit.currency || "",
+    limit_type: limit.limit_type || "FUNGIBLE",
+    investment_approved: limit.investment_approved || "",
+    current_outstanding: limit.current_outstanding || "0",
+    is_active: limit.is_active ?? true,
+  });
+  const [error, setError] = useState(null);
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  async function save() {
+    setError(null);
+    try {
+      await mastersApi.saveLimit(form, limit.id);
+      onSaved();
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <Card title={limit.id ? "Edit Limit" : "Add Limit"}>
+          <Field label="Company">
+            <select value={form.company} onChange={set("company")}>
+              <option value="">Select</option>
+              {masters.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Financial Year">
+            <select value={form.financial_year} onChange={set("financial_year")}>
+              <option value="">Select</option>
+              {masters.years.map((y) => <option key={y.id} value={y.id}>{y.code}</option>)}
+            </select>
+          </Field>
+          <Field label="Currency">
+            <select value={form.currency} onChange={set("currency")}>
+              <option value="">Select</option>
+              {masters.currencies.map((c) => <option key={c.id} value={c.id}>{c.code}</option>)}
+            </select>
+          </Field>
+          <Field label="Limit Type">
+            <select value={form.limit_type} onChange={set("limit_type")}>
+              <option value="FUNGIBLE">Fungible</option>
+              <option value="NON_FUNGIBLE">Non-Fungible</option>
+              <option value="SURPLUS">Surplus</option>
+              <option value="TEMPORARY">Temporary</option>
+            </select>
+          </Field>
+          <Field label="Investment Approved">
+            <input type="number" step="0.01" value={form.investment_approved} onChange={set("investment_approved")} />
+          </Field>
+          <Field label="Current Outstanding">
+            <input type="number" step="0.01" value={form.current_outstanding} onChange={set("current_outstanding")} />
+          </Field>
+          <ErrorText error={error} />
+          <div className="btn-row">
+            <button className="btn btn-primary" onClick={save}>Save</button>
+            <button className="btn btn-light" onClick={onClose}>Cancel</button>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+//frontend / src / pages / Login.jsx
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth.jsx";
+import { ErrorText } from "../components/ui.jsx";
+
+export default function Login() {
+  const { login, user } = useAuth();
+  const navigate = useNavigate();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  if (user) navigate("/");
+
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await login(username, password);
+      navigate("/");
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="login-wrap">
+      <form className="login-card" onSubmit={submit}>
+        <h1>LTI / LNI Portal</h1>
+        <p className="muted">Long-Term Investment &amp; Corporate Finance</p>
+        <hr className="login-divider" />
+        <label className="field">
+          <span className="field-label">Username</span>
+          <input value={username} onChange={(e) => setUsername(e.target.value)} required />
+        </label>
+        <label className="field">
+          <span className="field-label">Password</span>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </label>
+        <ErrorText error={error} />
+        <button className="btn btn-primary" disabled={busy}>
+          {busy ? "Signing in..." : "Sign in"}
+        </button>
+        <p className="hint">Demo: admin / Admin@123</p>
+      </form>
+    </div>
+  );
+}
+
+//frontend / src / pages / ProposalCreate.jsx
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { mastersApi, proposalsApi } from "../services/endpoints";
+import { Field, ErrorText, Card } from "../components/ui.jsx";
+
+const LIMIT_TYPES = [
+  ["FUNGIBLE", "Fungible"],
+  ["NON_FUNGIBLE", "Non-Fungible"],
+  ["SURPLUS", "Surplus"],
+  ["TEMPORARY", "Temporary"],
+];
+
+export default function ProposalCreate() {
+  const navigate = useNavigate();
+  const [masters, setMasters] = useState({ companies: [], currencies: [], types: [], years: [] });
+  const [form, setForm] = useState({
+    company: "", investment_type: "", financial_year: "", currency: "",
+    limit_type: "FUNGIBLE", counterparty: "", amount: "", purpose: "",
+    tenure_months: "", interest_rate: "", value_date: "",
+  });
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    Promise.all([
+      mastersApi.companies({ is_active: true }),
+      mastersApi.currencies(),
+      mastersApi.investmentTypes(),
+      mastersApi.financialYears(),
+    ]).then(([c, cur, t, y]) => {
+      setMasters({
+        companies: c.data.results || c.data,
+        currencies: cur.data.results || cur.data,
+        types: t.data.results || t.data,
+        years: y.data.results || y.data,
+      });
+    });
+  }, []);
+
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const payload = { ...form };
+      ["tenure_months", "interest_rate", "value_date"].forEach((k) => {
+        if (!payload[k]) delete payload[k];
+      });
+      const { data } = await proposalsApi.create(payload);
+      navigate(`/proposals/${data.id}`);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <h2>New Investment Proposal</h2>
+      <Card>
+        <form onSubmit={submit} className="form-grid">
+          <Field label="Company">
+            <select value={form.company} onChange={set("company")} required>
+              <option value="">Select company</option>
+              {masters.companies.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Investment Type">
+            <select value={form.investment_type} onChange={set("investment_type")} required>
+              <option value="">Select type</option>
+              {masters.types.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Financial Year">
+            <select value={form.financial_year} onChange={set("financial_year")} required>
+              <option value="">Select year</option>
+              {masters.years.map((y) => (
+                <option key={y.id} value={y.id}>{y.code}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Currency">
+            <select value={form.currency} onChange={set("currency")} required>
+              <option value="">Select currency</option>
+              {masters.currencies.map((c) => (
+                <option key={c.id} value={c.id}>{c.code}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Limit Type">
+            <select value={form.limit_type} onChange={set("limit_type")} required>
+              {LIMIT_TYPES.map(([v, l]) => (
+                <option key={v} value={v}>{l}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Counterparty / Investee">
+            <input value={form.counterparty} onChange={set("counterparty")} required />
+          </Field>
+          <Field label="Amount">
+            <input type="number" step="0.01" value={form.amount} onChange={set("amount")} required />
+          </Field>
+          <Field label="Tenure (months)">
+            <input type="number" value={form.tenure_months} onChange={set("tenure_months")} />
+          </Field>
+          <Field label="Interest Rate (%)">
+            <input type="number" step="0.001" value={form.interest_rate} onChange={set("interest_rate")} />
+          </Field>
+          <Field label="Value Date">
+            <input type="date" value={form.value_date} onChange={set("value_date")} />
+          </Field>
+          <div className="full">
+            <Field label="Purpose">
+              <textarea value={form.purpose} onChange={set("purpose")} required rows={3} />
+            </Field>
+          </div>
+          <div className="full">
+            <ErrorText error={error} />
+            <button className="btn btn-primary" disabled={busy}>
+              {busy ? "Saving..." : "Create Draft"}
+            </button>
+          </div>
+        </form>
+      </Card>
+    </div>
+  );
+}
+
+//frontend / src / pages / ProposalDetail.jsx
+import { useCallback, useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
+import {
+  complianceApi,
+  proposalsApi,
+  questionnaireApi,
+  usersApi,
+  workflowApi,
+} from "../services/endpoints";
+import { useAuth } from "../hooks/useAuth.jsx";
+import { Card, StateBadge, ErrorText, Field } from "../components/ui.jsx";
+
+const money = (n) => Number(n || 0).toLocaleString("en-IN");
+
+export default function ProposalDetail() {
+  const { id } = useParams();
+  const { isAdmin, hasRole } = useAuth();
+  const [proposal, setProposal] = useState(null);
+  const [actions, setActions] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(() => {
+    setError(null);
+    proposalsApi.get(id).then((r) => setProposal(r.data)).catch(setError);
+    proposalsApi.availableActions(id).then((r) => setActions(r.data.actions)).catch(() => {});
+    workflowApi.approvals(id).then((r) => setHistory(r.data.results || r.data)).catch(() => {});
+  }, [id]);
+
+  useEffect(() => load(), [load]);
+
+  if (error) return <ErrorText error={error} />;
+  if (!proposal) return <div>Loading proposal...</div>;
+
+  return (
+    <div>
+      <div className="page-head">
+        <h2>{proposal.reference_no}</h2>
+        <StateBadge state={proposal.current_state} label={proposal.state_display} />
+      </div>
+
+      <div className="grid-2">
+        <Card title="Proposal Details">
+          <dl className="detail-list">
+            <div><dt>Company</dt><dd>{proposal.company_name}</dd></div>
+            <div><dt>Type</dt><dd>{proposal.investment_type_name}</dd></div>
+            <div><dt>Counterparty</dt><dd>{proposal.counterparty}</dd></div>
+            <div><dt>Amount</dt><dd>{proposal.currency_code} {money(proposal.amount)}</dd></div>
+            <div><dt>Limit Type</dt><dd>{proposal.limit_type_display}</dd></div>
+            <div><dt>Financial Year</dt><dd>{proposal.financial_year_code}</dd></div>
+            <div><dt>Tenure</dt><dd>{proposal.tenure_months || "-"} months</dd></div>
+            <div><dt>Interest</dt><dd>{proposal.interest_rate || "-"}%</dd></div>
+            <div><dt>Material</dt><dd>{proposal.is_material ? "Yes" : "No"}</dd></div>
+            <div><dt>Total Disbursed</dt><dd>{money(proposal.total_disbursed)}</dd></div>
+          </dl>
+          <p className="muted">{proposal.purpose}</p>
+        </Card>
+
+        <WorkflowPanel
+          proposal={proposal}
+          actions={actions}
+          onDone={load}
+        />
+      </div>
+
+      <Questionnaire proposalId={id} state={proposal.current_state} onSaved={load} />
+
+      <ComplianceChecklist proposalId={id} />
+
+      <Documents proposal={proposal} onUploaded={load} />
+
+      {(hasRole("CASH_MANAGEMENT", "HO_ACCOUNTS") || isAdmin()) && (
+        <DisbursementPanel proposal={proposal} onDone={load} />
+      )}
+
+      <Card title="Approval History">
+        <table className="table">
+          <thead>
+            <tr><th>When</th><th>Actor</th><th>Action</th><th>From → To</th><th>Remarks</th></tr>
+          </thead>
+          <tbody>
+            {history.map((h) => (
+              <tr key={h.id}>
+                <td>{new Date(h.created_at).toLocaleString()}</td>
+                <td>{h.actor_name} <span className="muted">({h.actor_role})</span></td>
+                <td>{h.action_display}</td>
+                <td>{h.from_state} → {h.to_state}</td>
+                <td>{h.remarks}</td>
+              </tr>
+            ))}
+            {history.length === 0 && (
+              <tr><td colSpan={5} className="muted center">No actions yet.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+function WorkflowPanel({ proposal, actions, onDone }) {
+  const [remarks, setRemarks] = useState("");
+  const [assignee, setAssignee] = useState("");
+  const [execs, setExecs] = useState([]);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const needsAssignee = proposal.current_state === "CORP_FINANCE_HEAD_REVIEW";
+
+  useEffect(() => {
+    if (needsAssignee) {
+      usersApi.approvers()
+        .then((r) => {
+          const list = r.data.results || r.data;
+          console.log(JSON.stringify(list));
+          setExecs(list);
+        })
+        .catch(() => {});
+    }
+  }, [needsAssignee]);
+
+  const actionLabel = {
+    SUBMIT: "Submit",
+    APPROVE: "Approve / Forward",
+    REJECT: "Reject / Send Back",
+    COMPLETE: "Complete Disbursement",
+  };
+
+  async function run(action) {
+    setBusy(true);
+    setError(null);
+    try {
+      const payload = { remarks };
+      if (needsAssignee && action === "APPROVE") payload.assignee = assignee;
+      const endpoint = action.toLowerCase();
+      await proposalsApi.act(proposal.id, endpoint, payload);
+      setRemarks("");
+      onDone();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (actions.length === 0) {
+    return (
+      <Card title="Workflow">
+        <p className="muted">You have no pending actions on this proposal at its current stage.</p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card title="Workflow Actions">
+      {needsAssignee && (
+        <Field label="Select Authorised Person (Group MD & CEO / Group CFO / Other)">
+          <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
+            <option value="">Select approver</option>
+            {execs.map((u) => (
+              <option key={u.id} value={u.id}>{u.full_name} ({u.role_code})</option>
+            ))}
+          </select>
+        </Field>
+      )}
+      <Field label="Remarks (mandatory for reject)">
+        <textarea value={remarks} onChange={(e) => setRemarks(e.target.value)} rows={2} />
+      </Field>
+      <ErrorText error={error} />
+      <div className="btn-row">
+        {actions.map((a) => (
+          <button
+            key={a}
+            className={`btn ${a === "REJECT" ? "btn-danger" : "btn-primary"}`}
+            disabled={busy}
+            onClick={() => run(a)}
+          >
+            {actionLabel[a] || a}
+          </button>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function Questionnaire({ proposalId, state, onSaved }) {
+  const [questions, setQuestions] = useState([]);
+  const [answers, setAnswers] = useState({});
+  const [error, setError] = useState(null);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(() => {
+    questionnaireApi.forProposal(proposalId).then((r) => {
+      setQuestions(r.data.questions);
+      const map = {};
+      r.data.questions.forEach((q) => (map[q.id] = q.answer_text || ""));
+      setAnswers(map);
+    });
+  }, [proposalId]);
+
+  useEffect(() => load(), [load, state]);
+
+  if (questions.length === 0) return null;
+
+  async function save() {
+    setError(null);
+    try {
+      await questionnaireApi.bulkAnswer({
+        proposal: proposalId,
+        answers: Object.entries(answers).map(([question, answer_text]) => ({
+          question: Number(question),
+          answer_text,
+        })),
+      });
+      setMsg("Questionnaire saved.");
+      setTimeout(() => setMsg(""), 2500);
+      onSaved();
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  return (
+    <Card title="Questionnaire (your role, this stage)">
+      {questions.map((q) => (
+        <Field key={q.id} label={`${q.text}${q.is_mandatory ? " *" : ""}`}>
+          {q.answer_type === "BOOLEAN" ? (
+            <select
+              value={answers[q.id] || ""}
+              onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
+            >
+              <option value="">Select</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          ) : q.answer_type === "CHOICE" ? (
+            <select
+              value={answers[q.id] || ""}
+              onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
+            >
+              <option value="">Select</option>
+              {(q.options || []).map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type={q.answer_type === "NUMBER" ? "number" : "text"}
+              value={answers[q.id] || ""}
+              onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
+            />
+          )}
+        </Field>
+      ))}
+      <ErrorText error={error} />
+      {msg && <div className="success-text">{msg}</div>}
+      <button className="btn btn-primary" onClick={save}>Save Answers</button>
+    </Card>
+  );
+}
+
+function ComplianceChecklist({ proposalId }) {
+  const [items, setItems] = useState([]);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(() => {
+    complianceApi.forProposal(proposalId).then((r) => setItems(r.data.items)).catch(setError);
+  }, [proposalId]);
+
+  useEffect(() => load(), [load]);
+
+  if (items.length === 0) return null;
+
+  async function confirm(item, confirmed, remarks, file) {
+    const fd = new FormData();
+    fd.append("proposal", proposalId);
+    fd.append("item", item.id);
+    fd.append("is_confirmed", confirmed);
+    fd.append("remarks", remarks || "");
+    if (file) fd.append("document", file);
+    try {
+      await complianceApi.saveValidation(fd, item.validation?.id);
+      load();
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  return (
+    <Card title="Compliance Checklist (Sec 16.1)">
+      <ErrorText error={error} />
+      <table className="table">
+        <thead>
+          <tr><th>Item</th><th>Responsible</th><th>Status</th><th>Confirm</th></tr>
+        </thead>
+        <tbody>
+          {items.map((it) => (
+            <ComplianceRow key={it.id} item={it} onConfirm={confirm} />
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+function ComplianceRow({ item, onConfirm }) {
+  const [remarks, setRemarks] = useState(item.validation?.remarks || "");
+  const [file, setFile] = useState(null);
+  const confirmed = item.validation?.is_confirmed;
+  return (
+    <tr>
+      <td>
+        <strong>{item.title}</strong>
+        <div className="muted small">{item.category_display}</div>
+      </td>
+      <td>{item.responsible_display}</td>
+      <td>
+        {confirmed ? (
+          <span className="badge badge-success">Confirmed</span>
+        ) : (
+          <span className="badge badge-muted">Pending</span>
+        )}
+      </td>
+      <td>
+        <input
+          className="inline-input"
+          placeholder="Remarks"
+          value={remarks}
+          onChange={(e) => setRemarks(e.target.value)}
+        />
+        {item.requires_document && (
+          <input type="file" onChange={(e) => setFile(e.target.files[0])} />
+        )}
+        <button
+          className="btn btn-light btn-sm"
+          onClick={() => onConfirm(item, !confirmed, remarks, file)}
+        >
+          {confirmed ? "Unconfirm" : "Confirm"}
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+function Documents({ proposal, onUploaded }) {
+  const [file, setFile] = useState(null);
+  const [docType, setDocType] = useState("");
+  const [error, setError] = useState(null);
+
+  async function upload() {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("proposal", proposal.id);
+    fd.append("file", file);
+    fd.append("doc_type", docType);
+    try {
+      await proposalsApi.uploadDocument(fd);
+      setFile(null);
+      setDocType("");
+      onUploaded();
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  return (
+    <Card title="Documents">
+      <div className="btn-row">
+        <input type="file" onChange={(e) => setFile(e.target.files[0])} />
+        <input placeholder="Document type" value={docType} onChange={(e) => setDocType(e.target.value)} />
+        <button className="btn btn-primary btn-sm" onClick={upload}>Upload</button>
+      </div>
+      <ErrorText error={error} />
+      <ul className="doc-list">
+        {(proposal.documents || []).map((d) => (
+          <li key={d.id}>
+            <a href={d.file} target="_blank" rel="noreferrer">{d.doc_type || "Document"}</a>
+            <span className="muted small"> — {d.uploaded_by_name}</span>
+          </li>
+        ))}
+        {(proposal.documents || []).length === 0 && <li className="muted">No documents.</li>}
+      </ul>
+    </Card>
+  );
+}
+
+function DisbursementPanel({ proposal, onDone }) {
+  const [form, setForm] = useState({
+    amount: "", value_date: "", exchange_rate: "1", payment_reference: "", remarks: "",
+  });
+  const [error, setError] = useState(null);
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  async function submit() {
+    setError(null);
+    try {
+      await proposalsApi.disburse(proposal.id, { ...form, currency: proposal.currency });
+      setForm({ amount: "", value_date: "", exchange_rate: "1", payment_reference: "", remarks: "" });
+      onDone();
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  return (
+    <Card title="Record Disbursement">
+      <div className="form-grid">
+        <Field label="Amount"><input type="number" step="0.01" value={form.amount} onChange={set("amount")} /></Field>
+        <Field label="Value Date"><input type="date" value={form.value_date} onChange={set("value_date")} /></Field>
+        <Field label="Exchange Rate"><input type="number" step="0.000001" value={form.exchange_rate} onChange={set("exchange_rate")} /></Field>
+        <Field label="Payment Reference"><input value={form.payment_reference} onChange={set("payment_reference")} /></Field>
+      </div>
+      <ErrorText error={error} />
+      <button className="btn btn-primary" onClick={submit}>Record Disbursement</button>
+
+      <table className="table" style={{ marginTop: 16 }}>
+        <thead>
+          <tr><th>Amount</th><th>Currency</th><th>Value Date</th><th>Reference</th></tr>
+        </thead>
+        <tbody>
+          {(proposal.disbursements || []).map((d) => (
+            <tr key={d.id}>
+              <td>{money(d.amount)}</td>
+              <td>{d.currency_code}</td>
+              <td>{d.value_date}</td>
+              <td>{d.payment_reference}</td>
+            </tr>
+          ))}
+          {(proposal.disbursements || []).length === 0 && (
+            <tr><td colSpan={4} className="muted center">No disbursements yet.</td></tr>
+          )}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+//frontend / src / pages / Proposals.jsx
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { proposalsApi } from "../services/endpoints";
+import { useAuth } from "../hooks/useAuth.jsx";
+import { StateBadge, ErrorText } from "../components/ui.jsx";
+
+export default function Proposals() {
+  const { hasRole, isAdmin } = useAuth();
+  const [items, setItems] = useState([]);
+  const [error, setError] = useState(null);
+  const [search, setSearch] = useState("");
+
+  function load() {
+    proposalsApi
+      .list({ search })
+      .then((r) => setItems(r.data.results || r.data))
+      .catch(setError);
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
+  const canCreate = isAdmin() || hasRole("GROUP_ENTITY_USER");
+
+  return (
+    <div>
+      <div className="page-head">
+        <h2>Investment Proposals</h2>
+        {canCreate && (
+          <Link className="btn btn-success" to="/proposals/new">
+            + New Proposal
+          </Link>
+        )}
+      </div>
+      <input
+        className="search"
+        placeholder="Search reference / counterparty..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <ErrorText error={error} />
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Reference</th>
+            <th>Company</th>
+            <th>Type</th>
+            <th>Counterparty</th>
+            <th className="num">Amount</th>
+            <th>Stage</th>
+            <th>Created By</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((p) => (
+            <tr key={p.id}>
+              <td>{p.reference_no}</td>
+              <td>{p.company_name}</td>
+              <td>{p.investment_type_name}</td>
+              <td>{p.counterparty}</td>
+              <td className="num">
+                {p.currency_code} {Number(p.amount).toLocaleString("en-IN")}
+              </td>
+              <td><StateBadge state={p.current_state} label={p.state_display} /></td>
+              <td>{p.created_by_name}</td>
+              <td>
+                <Link className="btn btn-light btn-sm" to={`/proposals/${p.id}`}>
+                  Open
+                </Link>
+              </td>
+            </tr>
+          ))}
+          {items.length === 0 && (
+            <tr>
+              <td colSpan={8} className="muted center">No proposals found.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+//frontend / src / pages / Reports.jsx
+import { useState } from "react";
+import api from "../services/api";
+import { Card, ErrorText } from "../components/ui.jsx";
+
+const REPORTS = [
+  { kind: "investment", label: "Investment Report", file: "investment_report.xlsx" },
+  { kind: "disbursement", label: "Disbursement Report", file: "disbursement_report.xlsx" },
+  { kind: "limit-utilization", label: "Limit Utilisation Report", file: "limit_utilization_report.xlsx" },
+];
+
+export default function Reports() {
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState("");
+
+  // Exports are protected endpoints, so download as an authenticated blob.
+  async function download(kind, file) {
+    setBusy(kind);
+    setError(null);
+    try {
+      const res = await api.get(`/reports/${kind}/export/`, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div>
+      <h2>Reports</h2>
+      <p className="muted">Export standard reports to Excel (BRD Sec 6 - Reporting &amp; Audit).</p>
+      <ErrorText error={error} />
+      <div className="grid-2">
+        {REPORTS.map((r) => (
+          <Card key={r.kind} title={r.label}>
+            <button
+              className="btn btn-primary"
+              disabled={busy === r.kind}
+              onClick={() => download(r.kind, r.file)}
+            >
+              {busy === r.kind ? "Preparing..." : "Download Excel"}
+            </button>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+//frontend / src / pages / Users.jsx
+import { useEffect, useState } from "react";
+import { usersApi, mastersApi } from "../services/endpoints";
+import { Card, ErrorText, Field } from "../components/ui.jsx";
+
+export default function Users() {
+  const [users, setUsers] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [error, setError] = useState(null);
+  const [editing, setEditing] = useState(null);
+
+  function load() {
+    usersApi.list().then((r) => setUsers(r.data.results || r.data)).catch(setError);
+  }
+
+  useEffect(() => {
+    load();
+    usersApi.roles().then((r) => setRoles(r.data.results || r.data));
+    mastersApi.companies().then((r) => setCompanies(r.data.results || r.data));
+  }, []);
+
+  return (
+    <div>
+      <div className="page-head">
+        <h2>Users &amp; Roles</h2>
+        <button className="btn btn-success" onClick={() => setEditing({})}>+ Add User</button>
+      </div>
+      <ErrorText error={error} />
+      <table className="table">
+        <thead>
+          <tr><th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Company</th><th>Active</th><th></th></tr>
+        </thead>
+        <tbody>
+          {users.map((u) => (
+            <tr key={u.id}>
+              <td>{u.username}</td>
+              <td>{u.full_name}</td>
+              <td>{u.email}</td>
+              <td>{u.role_name}</td>
+              <td>{u.company_name || "-"}</td>
+              <td>{u.is_active ? "Yes" : "No"}</td>
+              <td><button className="btn btn-light btn-sm" onClick={() => setEditing(u)}>Edit</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {editing && (
+        <UserForm
+          user={editing}
+          roles={roles}
+          companies={companies}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function UserForm({ user, roles, companies, onClose, onSaved }) {
+  const isNew = !user.id;
+  const [form, setForm] = useState({
+    username: user.username || "",
+    email: user.email || "",
+    first_name: user.first_name || "",
+    last_name: user.last_name || "",
+    role: user.role || "",
+    company: user.company || "",
+    is_active: user.is_active ?? true,
+    password: "",
+  });
+  const [error, setError] = useState(null);
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  async function save() {
+    setError(null);
+    try {
+      const payload = { ...form };
+      if (!payload.company) delete payload.company;
+      if (!isNew && !payload.password) delete payload.password;
+      if (isNew) await usersApi.create(payload);
+      else await usersApi.update(user.id, payload);
+      onSaved();
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <Card title={isNew ? "Add User" : "Edit User"}>
+          <div className="form-grid">
+            <Field label="Username"><input value={form.username} onChange={set("username")} disabled={!isNew} /></Field>
+            <Field label="Email"><input value={form.email} onChange={set("email")} /></Field>
+            <Field label="First Name"><input value={form.first_name} onChange={set("first_name")} /></Field>
+            <Field label="Last Name"><input value={form.last_name} onChange={set("last_name")} /></Field>
+            <Field label="Role">
+              <select value={form.role} onChange={set("role")}>
+                <option value="">Select role</option>
+                {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Company (optional)">
+              <select value={form.company} onChange={set("company")}>
+                <option value="">None</option>
+                {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </Field>
+            <Field label={isNew ? "Password" : "New Password (optional)"}>
+              <input type="password" value={form.password} onChange={set("password")} />
+            </Field>
+          </div>
+          <ErrorText error={error} />
+          <div className="btn-row">
+            <button className="btn btn-primary" onClick={save}>Save</button>
+            <button className="btn btn-light" onClick={onClose}>Cancel</button>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+//frontend / src / App.jsx
+import { Navigate, Route, Routes } from "react-router-dom";
+import { useAuth } from "./hooks/useAuth.jsx";
+import Layout from "./components/Layout.jsx";
+import Login from "./pages/Login.jsx";
+import Dashboard from "./pages/Dashboard.jsx";
+import Proposals from "./pages/Proposals.jsx";
+import ProposalCreate from "./pages/ProposalCreate.jsx";
+import ProposalDetail from "./pages/ProposalDetail.jsx";
+import Limits from "./pages/Limits.jsx";
+import Users from "./pages/Users.jsx";
+import AuditLog from "./pages/AuditLog.jsx";
+import Reports from "./pages/Reports.jsx";
+
+function Protected({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="center">Loading...</div>;
+  return user ? children : <Navigate to="/login" replace />;
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route
+        path="/"
+        element={
+          <Protected>
+            <Layout />
+          </Protected>
+        }
+      >
+        <Route index element={<Dashboard />} />
+        <Route path="proposals" element={<Proposals />} />
+        <Route path="proposals/new" element={<ProposalCreate />} />
+        <Route path="proposals/:id" element={<ProposalDetail />} />
+        <Route path="limits" element={<Limits />} />
+        <Route path="users" element={<Users />} />
+        <Route path="audit" element={<AuditLog />} />
+        <Route path="reports" element={<Reports />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
+
+//frontend / src / main.jsx
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import App from "./App.jsx";
+import { AuthProvider } from "./hooks/useAuth.jsx";
+import "./styles.css";
+
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    </BrowserRouter>
+  </React.StrictMode>
+);
+
+//frontend / src / styles.css
+:root {
+  --bg: #f5f5f5;
+  --panel: #ffffff;
+  --primary: #E31837;
+  --primary-dark: #c2102d;
+  --primary-light: #fdeaed;
+  --danger: #c0392b;
+  --success: #1e7e34;
+  --success-bg: #e6f4ea;
+  --muted: #6b7280;
+  --border: #e8e8e8;
+  --text: #1f2937;
+  --topbar-h: 60px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+a { color: var(--primary); text-decoration: none; }
+h2 { margin-top: 0; font-size: 20px; font-weight: 600; }
+
+.center { display: flex; align-items: center; justify-content: center; min-height: 60vh; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.full { grid-column: 1 / -1; }
+
+/* ── Top navigation bar (horizontal, no sidebar) ── */
+.app-shell { display: flex; flex-direction: column; min-height: 100vh; }
+
+.topbar {
+  display: flex; align-items: center;
+  background: var(--panel); height: var(--topbar-h);
+  padding: 0 28px; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 40;
+}
+
+.brand {
+  font-weight: 700; font-size: 18px; color: var(--primary);
+  margin-right: 36px; white-space: nowrap; letter-spacing: -0.3px;
+}
+
+.topbar nav { display: flex; gap: 4px; flex: 1; }
+
+.nav-link {
+  display: inline-flex; align-items: center; padding: 0 16px; height: var(--topbar-h);
+  color: var(--text); font-size: 14px; font-weight: 500;
+  border-bottom: 3px solid transparent; transition: color .15s, border-color .15s;
+}
+.nav-link:hover { color: var(--primary); }
+.nav-link.active { color: var(--text); border-bottom-color: var(--primary); font-weight: 600; }
+
+.topbar-right { display: flex; align-items: center; gap: 14px; margin-left: auto; }
+
+.user-info { display: flex; align-items: center; gap: 10px; }
+.user-name { font-size: 14px; font-weight: 600; line-height: 1.2; }
+.role-badge {
+  display: block; font-size: 11px; color: var(--muted); font-weight: 400;
+}
+.avatar {
+  width: 36px; height: 36px; border-radius: 50%; background: var(--primary);
+  color: #fff; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; flex-shrink: 0;
+}
+
+.content { padding: 28px 32px; flex: 1; }
+
+/* ── Buttons ── */
+.btn {
+  border: none; border-radius: 6px; padding: 9px 18px; cursor: pointer;
+  font-size: 14px; font-weight: 500; transition: background .15s;
+}
+.btn-sm { padding: 6px 12px; font-size: 13px; }
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-dark); }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover { background: #a93226; }
+.btn-success { background: var(--success); color: #fff; }
+.btn-success:hover { background: #166b29; }
+.btn-light { background: #eef0f3; color: var(--text); }
+.btn-light:hover { background: #e0e3e7; }
+.btn-outline {
+  background: transparent; border: 1px solid var(--border); color: var(--text);
+}
+.btn-outline:hover { border-color: var(--primary); color: var(--primary); }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+/* ── Cards ── */
+.card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; margin-bottom: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.card-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+}
+.card-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.card-body { padding: 20px; }
+
+/* ── Tables (clean, spacious, borderless like reference) ── */
+.table { width: 100%; border-collapse: collapse; background: var(--panel); }
+.table th, .table td {
+  text-align: left; padding: 14px 16px; font-size: 14px;
+  border-bottom: 1px solid #f0f0f0;
+}
+.table th {
+  background: #fafafa; color: var(--muted); font-weight: 600;
+  font-size: 13px; text-transform: uppercase; letter-spacing: 0.3px;
+}
+.table tbody tr:hover { background: #fafbfc; }
+.table tbody tr:last-child td { border-bottom: none; }
+
+/* Wrap tables for responsive + rounded corners */
+.table-wrap {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden; margin-bottom: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.table-wrap .table { border-radius: 0; }
+
+/* ── Forms ── */
+.field { display: block; margin-bottom: 16px; }
+.field-label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 5px; font-weight: 500; }
+.field input, .field select, .field textarea,
+.search, .inline-input {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 6px; font-size: 14px; background: #fff;
+  transition: border-color .15s;
+}
+.field input:focus, .field select:focus, .field textarea:focus,
+.search:focus {
+  outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-light);
+}
+.inline-input { width: auto; display: inline-block; margin-right: 6px; }
+.search { max-width: 360px; margin-bottom: 16px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 20px; }
+.page-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+
+/* ── Grids / stat cards (with red accent top border) ── */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+
+.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin: 4px 0 28px; }
+.stat {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 20px 22px; position: relative;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  border-top: 3px solid var(--primary);
+}
+.stat-value { font-size: 30px; font-weight: 700; color: var(--text); margin-top: 4px; }
+.stat-label { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+.detail-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 20px; margin: 0 0 14px; }
+.detail-list dt { color: var(--muted); font-size: 12px; }
+.detail-list dd { margin: 0; font-weight: 500; }
+
+/* ── Badges ── */
+.badge {
+  display: inline-block; padding: 4px 12px; border-radius: 4px;
+  font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+}
+.badge-success { background: var(--success-bg); color: var(--success); }
+.badge-info { background: var(--primary-light); color: var(--primary); }
+.badge-muted { background: #f0f1f3; color: var(--muted); }
+
+/* ── Text states ── */
+.error-text { color: var(--danger); background: #fdecea; padding: 10px 14px; border-radius: 6px; margin: 8px 0; font-size: 13px; }
+.success-text { color: var(--success); margin: 8px 0; font-size: 13px; }
+.hint { color: var(--muted); font-size: 12px; text-align: center; margin-top: 14px; }
+
+.doc-list { list-style: none; padding: 0; margin: 12px 0 0; }
+.doc-list li { padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+.doc-list li:last-child { border-bottom: none; }
+
+/* ── Login ── */
+.login-wrap {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; background: var(--bg);
+}
+.login-card {
+  background: var(--panel); padding: 40px 36px; border-radius: 12px;
+  width: 380px; box-shadow: 0 10px 40px rgba(0,0,0,0.08);
+}
+.login-card h1 { margin: 0 0 4px; font-size: 24px; color: var(--primary); font-weight: 700; }
+.login-card .btn-primary {
+  width: 100%; padding: 12px; font-size: 15px; border-radius: 8px; margin-top: 4px;
+}
+.login-divider {
+  width: 40px; height: 3px; background: var(--primary); border: none;
+  margin: 10px 0 20px;
+}
+
+/* ── Modal ── */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.modal { width: 580px; max-width: 92vw; max-height: 90vh; overflow: auto; }
+.modal .card { margin: 0; }
+
+/* ── Footer ── */
+.footer {
+  text-align: center; padding: 16px; font-size: 12px; color: var(--muted);
+  border-top: 1px solid var(--border); background: var(--panel); margin-top: auto;
+}
+
+@media (max-width: 900px) {
+  .grid-2, .grid-3, .form-grid { grid-template-columns: 1fr; }
+  .stat-grid { grid-template-columns: 1fr 1fr; }
+  .topbar nav { gap: 0; }
+  .nav-link { padding: 0 10px; font-size: 13px; }
+  .content { padding: 20px 16px; }
+}
+
+//frontend / index.html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LTI / LNI Portal</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
