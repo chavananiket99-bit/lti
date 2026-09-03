@@ -1,0 +1,134 @@
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { mastersApi, proposalsApi } from "../services/endpoints";
+import { Field, ErrorText, Card } from "../components/ui.jsx";
+
+const LIMIT_TYPES = [
+  ["FUNGIBLE", "Fungible"],
+  ["NON_FUNGIBLE", "Non-Fungible"],
+  ["SURPLUS", "Surplus"],
+  ["TEMPORARY", "Temporary"],
+];
+
+export default function ProposalCreate() {
+  const navigate = useNavigate();
+  const [masters, setMasters] = useState({ companies: [], currencies: [], types: [], years: [] });
+  const [form, setForm] = useState({
+    company: "", investment_type: "", financial_year: "", currency: "",
+    limit_type: "FUNGIBLE", counterparty: "", amount: "", purpose: "",
+    tenure_months: "", interest_rate: "", value_date: "",
+  });
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    Promise.all([
+      mastersApi.companies({ is_active: true }),
+      mastersApi.currencies(),
+      mastersApi.investmentTypes(),
+      mastersApi.financialYears(),
+    ]).then(([c, cur, t, y]) => {
+      setMasters({
+        companies: c.data.results || c.data,
+        currencies: cur.data.results || cur.data,
+        types: t.data.results || t.data,
+        years: y.data.results || y.data,
+      });
+    });
+  }, []);
+
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const payload = { ...form };
+      ["tenure_months", "interest_rate", "value_date"].forEach((k) => {
+        if (!payload[k]) delete payload[k];
+      });
+      const { data } = await proposalsApi.create(payload);
+      navigate(`/proposals/${data.id}`);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <h2>New Investment Proposal</h2>
+      <Card>
+        <form onSubmit={submit} className="form-grid">
+          <Field label="Company">
+            <select value={form.company} onChange={set("company")} required>
+              <option value="">Select company</option>
+              {masters.companies.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Investment Type">
+            <select value={form.investment_type} onChange={set("investment_type")} required>
+              <option value="">Select type</option>
+              {masters.types.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Financial Year">
+            <select value={form.financial_year} onChange={set("financial_year")} required>
+              <option value="">Select year</option>
+              {masters.years.map((y) => (
+                <option key={y.id} value={y.id}>{y.code}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Currency">
+            <select value={form.currency} onChange={set("currency")} required>
+              <option value="">Select currency</option>
+              {masters.currencies.map((c) => (
+                <option key={c.id} value={c.id}>{c.code}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Limit Type">
+            <select value={form.limit_type} onChange={set("limit_type")} required>
+              {LIMIT_TYPES.map(([v, l]) => (
+                <option key={v} value={v}>{l}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Counterparty / Investee">
+            <input value={form.counterparty} onChange={set("counterparty")} required />
+          </Field>
+          <Field label="Amount">
+            <input type="number" step="0.01" value={form.amount} onChange={set("amount")} required />
+          </Field>
+          <Field label="Tenure (months)">
+            <input type="number" value={form.tenure_months} onChange={set("tenure_months")} />
+          </Field>
+          <Field label="Interest Rate (%)">
+            <input type="number" step="0.001" value={form.interest_rate} onChange={set("interest_rate")} />
+          </Field>
+          <Field label="Value Date">
+            <input type="date" value={form.value_date} onChange={set("value_date")} />
+          </Field>
+          <div className="full">
+            <Field label="Purpose">
+              <textarea value={form.purpose} onChange={set("purpose")} required rows={3} />
+            </Field>
+          </div>
+          <div className="full">
+            <ErrorText error={error} />
+            <button className="btn btn-primary" disabled={busy}>
+              {busy ? "Saving..." : "Create Draft"}
+            </button>
+          </div>
+        </form>
+      </Card>
+    </div>
+  );
+}
