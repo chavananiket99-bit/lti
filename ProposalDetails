@@ -1,0 +1,869 @@
+import { useCallback, useEffect, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import {
+  complianceApi,
+  proposalsApi,
+  questionnaireApi,
+  usersApi,
+  workflowApi,
+  mastersApi,
+} from "../services/endpoints";
+import { useAuth } from "../hooks/useAuth.jsx";
+import { Card, StateBadge, ErrorText, Field } from "../components/ui.jsx";
+import { useRef } from "react";
+
+const money = (n) => Number(n || 0).toLocaleString("en-IN");
+
+const formatState = (state = "") =>
+  state
+    .replaceAll("_", " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+
+export default function ProposalDetail() {
+  const { id } = useParams();
+  const { isAdmin, hasRole } = useAuth();
+
+  const [proposal, setProposal] = useState(null);
+  const [actions, setActions] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [error, setError] = useState(null);
+  
+  async function downloadDocument(d) {
+    setError(null);
+    try {
+      const res = await proposalsApi.downloadDocument(d.id);
+
+      const contentDisposition = res.headers["content-disposition"];
+      let filename = "download";
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename\*?=([^;]+)/);
+        if (match) filename = match[1].replace(/UTF-8''/, "").replace(/"/g, "").trim();
+      } else {
+        filename = (d.file || "").split("/").pop().split("?")[0] || filename;
+      }
+
+      const blob = new Blob([res.data], {
+        type: res.headers["content-type"] || "application/octet-stream",
+      });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(link.href);
+    } catch (err) {
+      console.error("Download failed", err);
+      setError(err);
+      alert("Unable to download file from server. Check console for details.");
+    }
+  }
+  
+
+
+  const load = useCallback(() => {
+    setError(null);
+
+    proposalsApi
+      .get(id)
+      .then((r) => setProposal(r.data))
+      .catch(setError);
+
+    proposalsApi
+      .availableActions(id)
+      .then((r) => setActions(r.data.actions))
+      .catch(() => {});
+
+    workflowApi
+      .approvals(id)
+      .then((r) => setHistory(r.data.results || r.data))
+      .catch(() => {});
+  }, [id]);
+
+  useEffect(() => load(), [load]);
+
+  if (error) return <ErrorText error={error} />;
+
+  if (!proposal) {
+    return (
+      <div className="detail-loading">
+        <div className="loading-spinner" />
+        <span>Loading proposal...</span>
+      </div>
+    );
+  }
+  return (
+    <div className="proposal-detail-page">
+      {/* PAGE HEADER */}
+      <div className="proposal-detail-header">
+        <div className="set-position">
+          <Link to="/proposals" className="back-link">
+            ← Back to Proposals 
+          </Link>
+
+          <div className="proposal-title-row">
+            <div>
+              <h2>{proposal.reference_no}</h2>
+
+              <div className="proposal-subtitle">
+                <span>{proposal.investment_type_name}</span>
+                <span className="separator">•</span>
+                <span>{proposal.company_name}</span>
+              </div>
+            </div>
+
+            <StateBadge
+              state={proposal.current_state}
+              label={proposal.state_display}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* OVERVIEW */}
+      <div className="detail-grid">
+        <Card title="Proposal Details">
+          <div className="detail-list detail-list-enhanced">
+            <div>
+              <dt>Company</dt>
+              <dd>{proposal.company_name}</dd>
+            </div>
+
+            <div>
+              <dt>Investment Type</dt>
+              <dd>{proposal.investment_type_name}</dd>
+            </div>
+
+            <div>
+              <dt>Counterparty / Investee</dt>
+              <dd>{proposal.counterparty}</dd>
+            </div>
+
+            <div className="highlight-detail">
+              <dt>Amount</dt>
+              <dd>
+                {proposal.currency_code} {money(proposal.amount)}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Limit Type</dt>
+              <dd>{proposal.limit_type_display}</dd>
+            </div>
+
+            <div>
+              <dt>Financial Year</dt>
+              <dd>{proposal.financial_year_code}</dd>
+            </div>
+
+            <div>
+              <dt>Tenure</dt>
+              <dd>
+                {proposal.tenure_months
+                  ? `${proposal.tenure_months} months`
+                  : "-"}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Interest Rate</dt>
+              <dd>
+                {proposal.interest_rate ? `${proposal.interest_rate}%` : "-"}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Material</dt>
+              <dd>{proposal.is_material ? "Yes" : "No"}</dd>
+            </div>
+
+            <div className="highlight-detail">
+              <dt>Total Disbursed</dt>
+              <dd>
+                {proposal.currency_code} {money(proposal.total_disbursed)}
+              </dd>
+            </div>
+          </div>
+
+          <div className="purpose-box">
+            <div className="purpose-label">Purpose</div>
+            <p>{proposal.purpose || "No purpose provided."}</p>
+          </div>
+        </Card>
+        {/* QUESTIONNAIRE */}
+              <Questionnaire
+                proposalId={id}
+                state={proposal.current_state}
+                actions={actions}
+                onSaved={load}
+              />
+        
+      </div>
+        {/* DOCUMENTS */}
+      <Documents proposal={proposal} actions={actions} onUploaded={load} onDownload={downloadDocument} />
+       {/* DISBURSEMENT */}
+      {(hasRole("CASH_MANAGEMENT") && proposal.current_state !== "COMPLETED" && proposal.current_state !== "COMPLETE") && (
+        <DisbursementPanel proposal={proposal} onDone={load} />
+      )}
+
+     <WorkflowPanel proposal={proposal} actions={actions} onDone={load} />
+    </div>
+  );
+}
+
+/* =========================================================
+   WORKFLOW
+========================================================= */
+
+function WorkflowPanel({ proposal, actions, onDone }) {
+  const [remarks, setRemarks] = useState("");
+  const [assignee, setAssignee] = useState("");
+  const [execs, setExecs] = useState([]);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const needsAssignee = proposal.current_state === "CORP_FINANCE_HEAD_REVIEW";
+
+  useEffect(() => {
+    if (needsAssignee) {
+      usersApi
+        .approvers()
+        .then((r) => {
+          const list = r.data.results || r.data;
+          setExecs(list);
+        })
+        .catch(() => {});
+    }
+  }, [needsAssignee]);
+
+  const actionLabel = {
+    SUBMIT: "Submit",
+    APPROVE: "Approve",
+    REJECT: "Send Back",
+    COMPLETE: "Complete Disbursement",
+  };
+
+  async function run(action) {
+    setBusy(true);
+    setError(null);
+
+    try {
+      const payload = { remarks };
+
+      if (needsAssignee && action === "APPROVE") {
+        payload.assignee = assignee;
+      }
+
+      const endpoint = action.toLowerCase();
+      await proposalsApi.act(proposal.id, endpoint, payload);
+
+      setRemarks("");
+
+      onDone();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (actions.length === 0) {
+    return (
+      <Card title="Workflow">
+        <div className="workflow-empty">
+          <div className="workflow-empty-icon">✓</div>
+
+          <div>
+            <strong>No pending actions</strong>
+
+            <p>
+              You have no pending actions on this proposal at its current stage.
+            </p>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card title="Workflow Actions">
+      <div className="workflow-current-stage">
+        <span className="muted small">CURRENT STAGE</span>
+
+        <strong>
+          {proposal.state_display || formatState(proposal.current_state)}
+        </strong>
+      </div>
+
+      {needsAssignee && (
+        <Field label="Select Authorised Person (Group MD & CEO / Group CFO / Other)">
+          <select
+            value={assignee}
+            onChange={(e) => setAssignee(e.target.value)}
+          >
+            <option value="">Select approver</option>
+
+            {execs.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.full_name} ({u.role_code})
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
+      <Field label="Remarks (mandatory for revert)">
+        <textarea
+          value={remarks}
+          onChange={(e) => setRemarks(e.target.value)}
+          rows={4}
+          placeholder="Enter remarks..."
+        />
+      </Field>
+
+      <ErrorText error={error} />
+
+      <div className="workflow-actions">
+        {actions.map((a) => (
+          <button
+            key={a}
+            className={`btn ${a === "REJECT" ? "btn-danger" : "btn-primary"}`}
+            disabled={busy}
+            onClick={() => run(a)}
+          >
+            {busy ? "Processing..." : actionLabel[a] || a}
+          </button>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/* =========================================================
+   QUESTIONNAIRE
+========================================================= */
+
+function Questionnaire({ proposalId, actions = [], state, onSaved }) {
+  const [questions, setQuestions] = useState([]);
+  const [answers, setAnswers] = useState({});
+  const [error, setError] = useState(null);
+  const [msg, setMsg] = useState("");
+  const editable = Array.isArray(actions) && actions.length > 0;
+
+  const allAnswered = questions.length > 0 && questions.every((q) => {
+    if (!q.is_mandatory) return true;
+    const a = answers[q.id];
+    return a !== undefined && a !== null && String(a).trim() !== "";
+  });
+
+  const load = useCallback(() => {
+    questionnaireApi.forProposal(proposalId).then((r) => {
+      setQuestions(r.data.questions);
+
+      const map = {};
+
+      r.data.questions.forEach((q) => (map[q.id] = q.answer_text || ""));
+
+      setAnswers(map);
+    });
+  }, [proposalId]);
+
+  useEffect(() => load(), [load, state]);
+
+  if (questions.length === 0) return null;
+
+  async function save() {
+    setError(null);
+
+    try {
+      await questionnaireApi.bulkAnswer({
+        proposal: proposalId,
+        answers: Object.entries(answers).map(([question, answer_text]) => ({
+          question: Number(question),
+          answer_text,
+        })),
+      });
+
+      setMsg("Questionnaire saved.");
+
+      setTimeout(() => setMsg(""), 2500);
+
+      onSaved();
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  return (
+    <Card title="Questionnaire">
+      <div className="section-description">
+        Questions applicable to your role and the current proposal stage.
+      </div>
+
+      <div className="questionnaire-grid">
+        {questions.map((q) => (
+          <Field key={q.id} label={`${q.text}${q.is_mandatory ? " *" : ""}`}>
+            {q.answer_type === "BOOLEAN" ? (
+              <select
+                value={answers[q.id] || ""}
+                disabled={!editable}
+                onChange={(e) =>
+                  setAnswers({
+                    ...answers,
+                    [q.id]: e.target.value,
+                  })
+                }
+              >
+                <option value="">Select</option>
+
+                <option value="Yes">Yes</option>
+
+                <option value="No">No</option>
+              </select>
+            ) : q.answer_type === "CHOICE" ? (
+              <select
+                value={answers[q.id] || ""}
+                disabled={!editable}
+                onChange={(e) =>
+                  setAnswers({
+                    ...answers,
+                    [q.id]: e.target.value,
+                  })
+                }
+              >
+                <option value="">Select</option>
+
+                {(q.options || []).map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type={q.answer_type === "NUMBER" ? "number" : "text"}
+                value={answers[q.id] || ""}
+                disabled={!editable}
+                onChange={(e) =>
+                  setAnswers({
+                    ...answers,
+                    [q.id]: e.target.value,
+                  })
+                }
+              />
+            )}
+          </Field>
+        ))}
+      </div>
+
+      <ErrorText error={error} />
+
+      {msg && <div className="success-text">✓ {msg}</div>}
+
+      <div className="section-actions">
+        {editable && (
+          <>
+            <button
+              className="btn btn-primary"
+              onClick={save}
+              disabled={!allAnswered}
+            >
+              Save Answers
+            </button>
+
+            {!allAnswered && (
+              <div className="muted small" style={{ marginTop: 8 }}>
+                Please answer all mandatory questions before saving.
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/* =========================================================
+   COMPLIANCE
+========================================================= */
+
+function ComplianceChecklist({ proposalId }) {
+  const [items, setItems] = useState([]);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(() => {
+    complianceApi
+      .forProposal(proposalId)
+      .then((r) => setItems(r.data.items))
+      .catch(setError);
+  }, [proposalId]);
+
+  useEffect(() => load(), [load]);
+
+  if (items.length === 0) return null;
+
+  async function confirm(item, confirmed, remarks, file) {
+    const fd = new FormData();
+
+    fd.append("proposal", proposalId);
+
+    fd.append("item", item.id);
+
+    fd.append("is_confirmed", confirmed);
+
+    fd.append("remarks", remarks || "");
+
+    if (file) {
+      fd.append("document", file);
+    }
+
+    try {
+      await complianceApi.saveValidation(fd, item.validation?.id);
+
+      load();
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  const completed = items.filter((i) => i.validation?.is_confirmed).length;
+
+  return (
+    <Card title="Compliance Checklist">
+      <div className="compliance-header">
+        <div className="section-description">
+          Compliance validation under Sec 16.1.
+        </div>
+
+        <div className="compliance-progress">
+          {completed} / {items.length} Completed
+        </div>
+      </div>
+
+      <ErrorText error={error} />
+
+      <div className="table-wrapper">
+        <table className="table compliance-table">
+          <thead>
+            <tr>
+              <th>Compliance Item</th>
+              <th>Responsible</th>
+              <th>Status</th>
+              <th>Validation</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {items.map((it) => (
+              <ComplianceRow key={it.id} item={it} onConfirm={confirm} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function ComplianceRow({ item, onConfirm }) {
+  const [remarks, setRemarks] = useState(item.validation?.remarks || "");
+
+  const [file, setFile] = useState(null);
+
+  const confirmed = item.validation?.is_confirmed;
+
+  return (
+    <tr>
+      <td>
+        <div className="compliance-title">
+          {confirmed && <span className="check-icon">✓</span>}
+
+          <strong>{item.title}</strong>
+        </div>
+
+        <div className="muted small">{item.category_display}</div>
+      </td>
+
+      <td>{item.responsible_display}</td>
+
+      <td>
+        {confirmed ? (
+          <span className="badge badge-success">Confirmed</span>
+        ) : (
+          <span className="badge badge-muted">Pending</span>
+        )}
+      </td>
+
+      <td>
+        <div className="compliance-controls">
+          <input
+            className="inline-input"
+            placeholder="Remarks"
+            value={remarks}
+            onChange={(e) => setRemarks(e.target.value)}
+          />
+
+          {item.requires_document && (
+            <input
+              type="file"
+              className="file-input"
+              onChange={(e) => setFile(e.target.files[0])}
+            />
+          )}
+
+          <button
+            className="btn btn-light btn-sm"
+            onClick={() => onConfirm(item, !confirmed, remarks, file)}
+          >
+            {confirmed ? "Unconfirm" : "Confirm"}
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+/* =========================================================
+   DOCUMENTS
+========================================================= */
+
+function Documents({ proposal, actions = [], onUploaded, onDownload }) {
+  const [file, setFile] = useState(null);
+  const editable = Array.isArray(actions) && actions.length > 0 ;
+  const fileInputRef = useRef(null);
+  const [docType, setDocType] = useState("");
+  const [documentsTypes, setDocumentsTypes] = useState([]);
+  useEffect(() => {
+    mastersApi.documentsTypes()
+      .then((r) => setDocumentsTypes(r.data.results || r.data))
+      .catch(() => {});
+  }, []);
+  const [error, setError] = useState(null);
+  
+  async function upload() {
+    setError(null);
+    if (!file) return setError({ detail: "Select a file to upload." });
+    if (!docType) return setError({ detail: "Select a document type." });
+
+    const fd = new FormData();
+    fd.append("proposal", proposal.id);
+    fd.append("file", file);
+    fd.append("doc_type", docType);
+
+    try {
+      await proposalsApi.uploadDocument(fd);
+      // clear file input UI
+      setFile(null);
+      setDocType("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      onUploaded();
+    } catch (err) {
+      setError(err);
+    }
+  }
+  return (
+    <Card title="Documents">
+      <div className="section-description">
+        Upload and review supporting documents for this proposal.
+      </div>
+
+      <div className="document-upload" style={{ display: editable ? "block" : "none" }}>
+        <input ref={fileInputRef} type="file" onChange={(e) => setFile(e.target.files[0])} />
+
+        <select
+          className="inline-input"
+          value={docType}
+          onChange={(e) => setDocType(e.target.value)}
+        >
+          <option value="">Select document type</option>
+          {documentsTypes.map((dt) => (
+            <option key={dt.id} value={dt.type}>
+              {dt.type}
+            </option>
+          ))}
+        </select>
+
+        <button className="btn btn-primary" onClick={upload} disabled={!file || !docType || !editable}>
+          Upload
+        </button>
+      </div>
+    <ErrorText error={error} />
+      <div className="document-list">
+        {(proposal.documents || []).map((d) => (
+          <div className="document-item" key={d.id}>
+            <div className="document-icon">DOC</div>
+              <div className="document-info">
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <strong>{d.doc_type || "Document"}</strong>
+                <span className="muted small">Uploaded by {d.uploaded_by_name}</span>
+              </div>
+            </div>
+
+            <button
+              className="btn btn-light btn-sm"
+              onClick={() => onDownload && onDownload(d)}
+            >
+              Download
+            </button>
+          </div>
+        ))}
+
+        {(proposal.documents || []).length === 0 && (
+          <div className="empty-state">No documents uploaded yet.</div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/* =========================================================
+   DISBURSEMENT
+========================================================= */
+
+function DisbursementPanel({ proposal, onDone }) {
+  const [form, setForm] = useState({
+    amount: "",
+    value_date: "",
+    exchange_rate: "1",
+    payment_reference: "",
+    remarks: "",
+  });
+
+  const [error, setError] = useState(null);
+
+  const set = (k) => (e) =>
+    setForm({
+      ...form,
+      [k]: e.target.value,
+    });
+
+  async function submit() {
+    setError(null);
+
+    // validate amount: must be positive and total disbursed must not exceed proposal amount
+    const amt = Number(form.amount || 0);
+    const already = Number(proposal.total_disbursed || 0);
+    const allowed = Number(proposal.amount || 0);
+    const currencyId = proposal.currency;
+
+    if (!amt || amt <= 0) {
+      return setError("Enter a valid disbursement amount greater than 0.");
+    }
+
+    if (!form.value_date) {
+      return setError("Select a value date before recording disbursement.");
+    }
+
+    if (!currencyId) {
+      return setError("Proposal currency is missing. Please refresh and try again.");
+    }
+
+    if (already + amt > allowed) {
+      return setError(`Disbursement exceeds proposal amount. Available: ${proposal.currency_code} ${money(allowed - already)}`);
+    }
+
+    try {
+      await proposalsApi.disburse(proposal.id, {
+        ...form,
+        currency: currencyId,
+      });
+
+      setForm({
+        amount: "",
+        value_date: "",
+        exchange_rate: "1",
+        payment_reference: "",
+        remarks: "",
+      });
+
+      onDone();
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  return (
+    <Card title="Record Disbursement">
+      <div className="section-description">
+        Record the actual amount disbursed against this proposal.
+      </div>
+
+      <div className="form-grid disbursement-form four-fields">
+        <Field label="Amount">
+          <input
+            type="number"
+            step="0.01"
+            value={form.amount}
+            onChange={set("amount")}
+          />
+        </Field>
+
+        <Field label="Value Date">
+          <input
+            type="date"
+            value={form.value_date}
+            onChange={set("value_date")}
+          />
+        </Field>
+
+        <Field label="Exchange Rate">
+          <input
+            type="number"
+            step="0.000001"
+            value={form.exchange_rate}
+            onChange={set("exchange_rate")}
+          />
+        </Field>
+
+        <Field label="Payment Reference">
+          <input
+            value={form.payment_reference}
+            onChange={set("payment_reference")}
+          />
+        </Field>
+      </div>
+
+      <ErrorText error={error} />
+
+      <div className="section-actions">
+        <button className="btn btn-primary" onClick={submit}>
+          Record Disbursement
+        </button>
+      </div>
+        <div className="subsection-title">Disbursement History</div>
+      <div className="table-wrapper">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Amount</th>
+              <th>Currency</th>
+              <th>Value Date</th>
+              <th>Payment Reference</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(proposal.disbursements || []).map((d) => (
+              <tr key={d.id}>
+                <td className="amount-cell">{money(d.amount)}</td>
+
+                <td>{d.currency_code}</td>
+
+                <td>{d.value_date}</td>
+
+                <td>{d.payment_reference}</td>
+              </tr>
+            ))}
+
+            {(proposal.disbursements || []).length === 0 && (
+              <tr>
+                <td colSpan={4} className="muted center empty-row">
+                  No disbursements yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
