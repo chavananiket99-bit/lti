@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth.jsx";
 import mahindraRiseLogo from "../assets/mahindra-rise-logo.png";
 function getInitials(user) {
@@ -15,6 +15,21 @@ function getInitials(user) {
   return (user?.username || "U").slice(0, 2).toUpperCase();
 }
 export default function Layout() {
+  const location = useLocation();
+
+  const [mastersOpen, setMastersOpen] = useState(false);
+  const mastersRef = useRef(null);
+
+  const masterItems = [
+    { to: "/users", label: "Users" },
+    { to: "/companies", label: "Company" },
+    { to: "/questions", label: "Questions" },
+    { to: "/currency", label: "Currency" },
+    { to: "/approval-config", label: "Approval Config" }
+  ];
+
+  const isMasterActive = masterItems.some((item) => location.pathname === item.to || location.pathname.startsWith(`${item.to}/`));
+
   const { user, logout, isAdmin } = useAuth();
   const navigate = useNavigate();
   const [profileOpen, setProfileOpen] = useState(false);
@@ -56,17 +71,28 @@ export default function Layout() {
       label: "Approval Config",
     },);
   }
+
   useEffect(() => {
-    function handleClickOutside(event) {
-      if (profileRef.current && !profileRef.current.contains(event.target)) {
-        setProfileOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, []);
+ function handleClickOutside(event) {
+   if (
+     mastersRef.current &&
+     !mastersRef.current.contains(event.target)
+   ) {
+     setMastersOpen(false);
+   }
+   if (
+     profileRef.current &&
+     !profileRef.current.contains(event.target)
+   ) {
+     setProfileOpen(false);
+   }
+ }
+ document.addEventListener("mousedown", handleClickOutside);
+ return () => {
+   document.removeEventListener("mousedown", handleClickOutside);
+ };
+}, []);
+
   function handleLogout() {
     setProfileOpen(false);
     logout();
@@ -89,19 +115,59 @@ export default function Layout() {
            Main Navigation
           ================================= */}
         <nav className="main-nav" aria-label="Main navigation">
-          {nav.map((n) => (
-            <NavLink
-              key={n.to}
-              to={n.to}
-              end={n.end}
-              className={({ isActive }) =>
-                `nav-link ${isActive ? "active" : ""}`
-              }
-            >
-              {n.label}
-            </NavLink>
-          ))}
-        </nav>
+ {nav.map((n) => (
+<NavLink
+     key={n.to}
+     to={n.to}
+     end={n.end}
+     className={({ isActive }) =>
+       `nav-link ${isActive ? "active" : ""}`
+     }
+>
+     {n.label}
+</NavLink>
+ ))}
+ {/* Masters dropdown - Admin only */}
+ {isAdmin() && (
+<div className="masters-menu" ref={mastersRef}>
+<button
+       type="button"
+       className={`nav-link masters-trigger ${
+         isMasterActive ? "active" : ""
+       } ${mastersOpen ? "open" : ""}`}
+       onClick={() => setMastersOpen((prev) => !prev)}
+       aria-expanded={mastersOpen}
+       aria-haspopup="true"
+>
+       Masters
+<span className="masters-chevron">
+         {mastersOpen ? "▲" : "▼"}
+</span>
+</button>
+     {mastersOpen && (
+<div className="masters-dropdown">
+<div className="masters-dropdown-heading">
+           Master Settings
+</div>
+         {masterItems.map((item) => (
+<NavLink
+             key={item.to}
+             to={item.to}
+             className={({ isActive }) =>
+               `masters-dropdown-item ${
+                 isActive ? "active" : ""
+               }`
+             }
+             onClick={() => setMastersOpen(false)}
+>
+             {item.label}
+</NavLink>
+         ))}
+</div>
+     )}
+</div>
+ )}
+</nav>
         {/* ================================
            User / Profile
           ================================= */}
