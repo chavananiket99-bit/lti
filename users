@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usersApi, mastersApi } from "../services/endpoints";
 import Swal from "sweetalert2";
 import { Card, ErrorText, Field, Pagination, usePagination, extractErrorMessage } from "../components/ui.jsx";
@@ -392,6 +392,25 @@ function UserForm({ user, roles, companies, onClose, onSaved }) {
     setFieldErrors((prev) => ({ ...prev, companies: undefined, company: undefined }));
   };
 
+  const toggleCompany = (companyId) => {
+    const id = Number(companyId);
+    setForm((prev) => {
+      const exists = prev.companies.includes(id);
+
+      const updatedCompanies = exists
+        ? prev.companies.filter((company) => company !== id)
+        : [...prev.companies, id];
+
+      return {
+        ...prev,
+        companies: updatedCompanies,
+        company: updatedCompanies[0] || "",
+      };
+    });
+
+    setFieldErrors((prev) => ({ ...prev, companies: undefined, company: undefined }));
+  };
+
   function validate() {
     const errors = {};
     if (!form.username.trim()) errors.username = "Token ID is required.";
@@ -515,18 +534,18 @@ function UserForm({ user, roles, companies, onClose, onSaved }) {
 
             {isGroupEntityUser ? (
               <Field label="Companies" required error={fieldErrors.companies}>
-                <select
-                  multiple
-                  value={form.companies.map(String)}
-                  onChange={setMultiCompanies}
-                  size={Math.min(6, Math.max(3, companies.length))}
-                >
+                <div className="company-checkbox-list">
                   {companies.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
+                    <label key={c.id} className="company-checkbox-item">
+                      <input
+                        type="checkbox"
+                        checked={form.companies.includes(Number(c.id))}
+                        onChange={() => toggleCompany(c.id)}
+                      />
+                      <span>{c.name}</span>
+                    </label>
                   ))}
-                </select>
+                </div>
               </Field>
             ) : (
               <Field label="Company" required error={fieldErrors.company}>
