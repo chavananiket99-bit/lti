@@ -1,85 +1,243 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import LogsModal from "../components/LogsModal.jsx";
+import RequestViewModal from "../components/RequestViewModal.jsx";
 import { proposalsApi } from "../services/endpoints";
 import { useAuth } from "../hooks/useAuth.jsx";
-import { StateBadge, ErrorText } from "../components/ui.jsx";
-
+import { StateBadge, ErrorText, Pagination, usePagination } from "../components/ui.jsx";
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="proposals-search-icon">
+      <circle
+        cx="11"
+        cy="11"
+        r="6.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="m16 16 4.5 4.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+function ArrowIcon() {
+  return (
+    <svg viewBox="0 0 20 20" className="proposals-arrow">
+      <path
+        d="M4 10h11M11 5l5 5-5 5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 export default function Proposals() {
   const { hasRole, isAdmin } = useAuth();
   const [items, setItems] = useState([]);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState("");
-
+  const [viewLogs, setViewLogs] = useState(null);
+  const [viewRequest, setViewRequest] = useState(null);
+  const closeViewLogs = () => setViewLogs(null);
+  const closeViewRequest = () => setViewRequest(null);
   function load() {
+    setError(null);
     proposalsApi
       .list({ search })
       .then((r) => setItems(r.data.results || r.data))
       .catch(setError);
   }
-
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
-  const canCreate = isAdmin() || hasRole("GROUP_ENTITY_USER");
+  const { page, setPage, total, totalPages, pageItems, from, to } = usePagination(items, 10);
+
+  const canCreate = hasRole("GROUP_ENTITY_USER");
 
   return (
-    <div>
-      <div className="page-head">
-        <h2>Investment Proposals</h2>
+    <div className="proposals-page">
+      {/* =====================================================
+         PAGE HEADER
+         ===================================================== */}
+      <div className="proposals-header">
+        <div>
+          {/* <div className="page-eyebrow">CORPORATE FINANCE</div> */}
+          <h1 className="proposals-title">Investment Proposals</h1>
+          {/* <p className="proposals-subtitle">
+            Manage and track long-term investment proposals.
+          </p> */}
+        </div>
         {canCreate && (
-          <Link className="btn btn-success" to="/proposals/new">
-            + New Proposal
+          <Link
+            className="btn btn-primary proposals-new-btn"
+            to="/proposals/new"
+          >
+            <span>+</span>
+            New Proposal
           </Link>
         )}
       </div>
-      <input
-        className="search"
-        placeholder="Search reference / counterparty..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
-      <ErrorText error={error} />
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Reference</th>
-            <th>Company</th>
-            <th>Type</th>
-            <th>Counterparty</th>
-            <th className="num">Amount</th>
-            <th>Stage</th>
-            <th>Created By</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((p) => (
-            <tr key={p.id}>
-              <td>{p.reference_no}</td>
-              <td>{p.company_name}</td>
-              <td>{p.investment_type_name}</td>
-              <td>{p.counterparty}</td>
-              <td className="num">
-                {p.currency_code} {Number(p.amount).toLocaleString("en-IN")}
-              </td>
-              <td><StateBadge state={p.current_state} label={p.state_display} /></td>
-              <td>{p.created_by_name}</td>
-              <td>
-                <Link className="btn btn-light btn-sm" to={`/proposals/${p.id}`}>
-                  Open
-                </Link>
-              </td>
-            </tr>
-          ))}
-          {items.length === 0 && (
-            <tr>
-              <td colSpan={8} className="muted center">No proposals found.</td>
-            </tr>
+
+      {/* =====================================================
+         TOOLBAR
+         ===================================================== */}
+      <div className="proposals-toolbar">
+        <div className="proposals-search-wrapper">
+          <SearchIcon />
+          <input
+            className="proposals-search"
+            placeholder="Search reference or counterparty..."
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
+          />
+          {search && (
+            <button
+              type="button"
+              className="proposals-search-clear"
+              onClick={() => setSearch("")}
+              aria-label="Clear search"
+            >
+              ×
+            </button>
           )}
-        </tbody>
-      </table>
+        </div>
+        <div className="proposals-count">
+          <strong>{total}</strong>
+          {total === 1 ? " proposal" : " proposals"}
+        </div>
+      </div>
+
+      {/* =====================================================
+         ERROR
+         ===================================================== */}
+      <ErrorText error={error} />
+
+      {/* =====================================================
+         PROPOSAL TABLE
+         ===================================================== */}
+      <div className="proposals-table-card">
+        {/* <div className="proposals-table-header">
+          <div>
+            <h2>Proposal Register</h2>
+            <p>Current investment proposals and workflow status</p>
+          </div>
+        </div> */}
+
+        <div className="proposals-table-wrapper">
+          <table className="table proposals-table">
+            <thead>
+              <tr>
+                <th className="reference-column">Reference</th>
+                <th className="company-column">Company</th>
+                <th className="type-column">Type</th>
+                <th className="amount-column num">Amount</th>
+                <th className="stage-column">Stage</th>
+                <th className="created-column">Created By</th>
+                <th className="action-column">Action</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {pageItems.map((p) => (
+                <tr key={p.id}>
+                  <td className="proposal-reference">{p.reference_no}</td>
+                      <td>
+                        <div className="proposal-company">{p.company_name}</div>
+                      </td>
+                      <td>
+                        <span className="proposal-type">
+                          {p.investment_type_name}
+                        </span>
+                      </td>
+                      <td className="num proposal-amount">
+                        {p.currency_code} {Number(p.amount).toLocaleString("en-IN")}
+                      </td>
+                  <td>
+                    <StateBadge
+                      state={p.current_state}
+                      label={p.state_display}
+                    />
+                  </td>
+                  <td>{p.created_by_name}</td>
+                  <td>
+                    <div class="action-buttons">
+                      <Link
+                        className="proposal-open-btn"
+                        to={`/proposals/${p.id}`}>
+                        Open
+                        <ArrowIcon />
+                      </Link>
+
+                      <button
+                        type="button"
+                        className="proposal-request-view-btn"
+                        onClick={() => setViewRequest(p)}
+                        title="View request details"
+                      >
+                        Request View
+                        <ArrowIcon />
+                      </button>
+
+                      <button
+                        type="button"
+                        className="proposal-view-log-btn"
+                        onClick={() => setViewLogs(p)}
+                      >
+                        Logs
+                        <ArrowIcon />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+
+              {items.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="proposals-empty">
+                    <div className="empty-icon">—</div>
+                    <div className="empty-title">No proposals found</div>
+                    <div className="empty-description">
+                      {search
+                        ? "Try changing your search criteria."
+                        : "There are currently no investment proposals."}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Table Footer */}
+        {total > 0 && (
+          <Pagination
+            page={page}
+            setPage={setPage}
+            totalPages={totalPages}
+            from={from}
+            to={to}
+            total={total}
+            noun={{ one: "proposal", many: "proposals" }}
+            onRefresh={load}
+          />
+        )}
+      </div>
+      <LogsModal open={!!viewLogs} proposal={viewLogs} onClose={closeViewLogs} />
+      <RequestViewModal open={!!viewRequest} proposal={viewRequest} onClose={closeViewRequest} />
     </div>
   );
 }
