@@ -2,105 +2,425 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { reportsApi } from "../services/endpoints";
 import { useAuth } from "../hooks/useAuth.jsx";
-import { Card, ErrorText } from "../components/ui.jsx";
-
+import { ErrorText } from "../components/ui.jsx";
 const money = (n) =>
-  new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(n || 0);
-
+  new Intl.NumberFormat("en-IN", {
+    maximumFractionDigits: 0,
+  }).format(n || 0);
 function greeting() {
   const h = new Date().getHours();
   if (h < 12) return "Good morning";
   if (h < 18) return "Good afternoon";
   return "Good evening";
 }
-
+function formatStage(stage) {
+  return String(stage)
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+/* ---------- Icons ---------- */
+function ProposalIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="dashboard-icon">
+      <path
+        d="M6 3h9l3 3v15H6V3Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M15 3v4h4M9 11h6M9 15h6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+function PendingIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="dashboard-icon">
+      <circle
+        cx="12"
+        cy="12"
+        r="8.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M12 7v5l3 2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+function CompletedIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="dashboard-icon">
+      <circle
+        cx="12"
+        cy="12"
+        r="8.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="m8 12 2.6 2.6L16 9"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+function MoneyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="dashboard-icon">
+      <rect
+        x="3"
+        y="6"
+        width="18"
+        height="12"
+        rx="2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <circle
+        cx="12"
+        cy="12"
+        r="2.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M7 9h.01M17 15h.01"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+function ArrowIcon() {
+  return (
+    <svg viewBox="0 0 20 20" className="action-arrow">
+      <path
+        d="M4 10h11M11 5l5 5-5 5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 export default function Dashboard() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
-
+  const [filters, setFilters] = useState({ month: "", year: "", quarter: "" });
+  const years = (() => {
+    const now = new Date();
+    const y = now.getFullYear();
+    return [y, y - 1, y - 2];
+  })();
   useEffect(() => {
-    reportsApi.dashboard().then((r) => setData(r.data)).catch(setError);
+    const params = {};
+    if (filters.month) params.month = filters.month;
+    if (filters.year) params.year = filters.year;
+    if (filters.quarter) params.quarter = filters.quarter;
+    reportsApi
+      .dashboard(params)
+      .then((r) => setData(r.data))
+      .catch(setError);
   }, []);
-
-  if (error) return <ErrorText error={error} />;
-  if (!data) return <div className="center muted">Loading dashboard...</div>;
-
+  if (error) {
+    return <ErrorText error={error} />;
+  }
+  if (!data) {
+    return (
+      <div className="dashboard-loading">
+        <div className="loading-spinner" />
+        <span>Loading dashboard...</span>
+      </div>
+    );
+  }
   return (
-    <div>
-      <p className="muted" style={{ marginBottom: 2 }}>
-        {greeting()}, {user?.first_name || user?.username}
-      </p>
-      <h2 style={{ fontSize: 26, marginBottom: 4 }}>LTI / LNI Portal</h2>
-      <hr className="login-divider" />
+    <div className="dashboard-page">
+      {/* ---------- Dashboard Heading ---------- */}
+      <div className="dashboard-header">
+        <div>
+          <div className="dashboard-eyebrow">CORPORATE FINANCE</div>
+          <h1 className="dashboard-title">
+            {greeting()}, {user?.first_name || user?.username}
+          </h1>
+          <p className="dashboard-subtitle">
+            Here's an overview of your Long-Term Investment &amp; LNI
+            activities.
+          </p>
+        </div>
+        {user.role == 4 && (
+          <Link to="/proposals/new" className="btn btn-primary dashboard-new-btn">
+            <span>+</span>
+            New Proposal
+          </Link>
+        )}
+      </div>
+      {/* ---------- KPI Cards ---------- */}
+      <div className="dashboard-stats">
+        <div className="dashboard-stat-card">
+          <div className="stat-top">
+            <div className="stat-icon">
+              <ProposalIcon />
+            </div>
+          </div>
+          <div className="stat-content">
+            <div className="stat-label">Total Proposals</div>
+            <div className="stat-value">{data.proposals_total}</div>
+          </div>
+          <div className="stat-description">All investment proposals</div>
+        </div>
 
-      <div className="stat-grid">
-        <div className="stat">
-          <div className="stat-label">Total Proposals</div>
-          <div className="stat-value">{data.proposals_total}</div>
+        <div className="dashboard-stat-card">
+          <div className="stat-top">
+            <div className="stat-icon">
+              <PendingIcon />
+            </div>
+          </div>
+          <div className="stat-content">
+            <div className="stat-label">In Progress</div>
+            <div className="stat-value">{data.proposals_pending}</div>
+          </div>
+          <div className="stat-description">Proposals requiring action</div>
         </div>
-        <div className="stat">
-          <div className="stat-label">In Progress</div>
-          <div className="stat-value">{data.proposals_pending}</div>
+
+        <div className="dashboard-stat-card">
+          <div className="stat-top">
+            <div className="stat-icon">
+              <CompletedIcon />
+            </div>
+          </div>
+          <div className="stat-content">
+            <div className="stat-label">Completed</div>
+            <div className="stat-value">{data.proposals_completed}</div>
+          </div>
+          <div className="stat-description">Successfully completed</div>
         </div>
-        <div className="stat">
-          <div className="stat-label">Completed</div>
-          <div className="stat-value">{data.proposals_completed}</div>
+
+        <div className="dashboard-stat-card">
+          <div className="stat-top">
+            <div className="stat-icon">
+              <MoneyIcon />
+            </div>
+          </div>
+          <div className="stat-content">
+            <div className="stat-label">Total Disbursed</div>
+            <div className="stat-value stat-money">
+              ₹{money(data.total_disbursed)}
+            </div>
+          </div>
+          <div className="stat-description">Total investment disbursed</div>
         </div>
-        <div className="stat">
-          <div className="stat-label">Total Disbursed</div>
-          <div className="stat-value">₹{money(data.total_disbursed)}</div>
+        
+        <div className="dashboard-filters">
+          <select
+            value={filters.month}
+            onChange={(e) => setFilters((s) => ({ ...s, month: e.target.value }))}
+          >
+            <option value="">Month</option>
+            {[
+              "JAN",
+              "FEB",
+              "MAR",
+              "APR",
+              "MAY",
+              "JUN",
+              "JUL",
+              "AUG",
+              "SEP",
+              "OCT",
+              "NOV",
+              "DEC",
+            ].map((m, i) => (
+              <option key={m} value={i + 1}>{m}</option>
+            ))}
+          </select>
+          <select
+            value={filters.year}
+            onChange={(e) => setFilters((s) => ({ ...s, year: e.target.value }))}
+          >
+            <option value="">Year</option>
+            {years.map((y) => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
+          <select
+            value={filters.quarter}
+            onChange={(e) => setFilters((s) => ({ ...s, quarter: e.target.value }))}
+          >
+            <option value="">Quarter</option>
+            <option value="1">Q1</option>
+            <option value="2">Q2</option>
+            <option value="3">Q3</option>
+            <option value="4">Q4</option>
+          </select>
+          <button
+            className="btn"
+            onClick={() => {
+              const params = {};
+              if (filters.month) params.month = filters.month;
+              if (filters.year) params.year = filters.year;
+              if (filters.quarter) params.quarter = filters.quarter;
+              setData(null);
+              setError(null);
+              reportsApi.dashboard(params).then((r) => setData(r.data)).catch(setError);
+            }}
+          >
+            Apply
+          </button>
+          <button
+            className="btn btn-link"
+            onClick={() => {
+              setFilters({ month: "", year: "", quarter: "" });
+              setData(null);
+              setError(null);
+              reportsApi.dashboard().then((r) => setData(r.data)).catch(setError);
+            }}
+          >
+            Reset
+          </button>
         </div>
       </div>
 
-      <div className="grid-2">
-        <Card title="Limit Utilisation">
-          <table className="table">
-            <thead>
-              <tr><th>Metric</th><th className="num">Amount</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>Approved</td><td className="num">{money(data.limits.approved)}</td></tr>
-              <tr><td>Outstanding</td><td className="num">{money(data.limits.outstanding)}</td></tr>
-              <tr><td>Available</td><td className="num">{money(data.limits.available)}</td></tr>
-            </tbody>
-          </table>
-        </Card>
-        <Card title="Proposals by Stage">
-          <table className="table">
-            <thead>
-              <tr><th>Stage</th><th className="num">Count</th></tr>
-            </thead>
-            <tbody>
-              {Object.entries(data.proposals_by_state).map(([state, count]) => (
-                <tr key={state}>
-                  <td>{state}</td>
-                  <td className="num">{count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
+      {/* ---------- Main Dashboard Sections ---------- */}
+      <div className="dashboard-grid">
+        {/* Limit Utilisation */}
+        <section className="dashboard-panel">
+          <div className="panel-header">
+            <div>
+              <h2>Limit Utilisation</h2>
+              <p>Current investment limit position</p>
+            </div>
+            <Link to="/limits" className="panel-link">
+              View limits
+              <ArrowIcon />
+            </Link>
+          </div>
+          <div className="limit-list">
+            <div className="limit-row">
+              <div className="limit-info">
+                <span className="limit-dot approved" />
+                <span>Approved</span>
+              </div>
+              <strong>₹{money(data.limits.approved)}</strong>
+            </div>
+
+            <div className="limit-row">
+              <div className="limit-info">
+                <span className="limit-dot outstanding" />
+                <span>Disbursed</span>
+              </div>
+              <strong>₹{money(data.limits.outstanding)}</strong>
+            </div>
+
+            <div className="limit-row limit-row-last">
+              <div className="limit-info">
+                <span className="limit-dot available" />
+                <span>Available</span>
+              </div>
+              <strong>₹{money(data.limits.available)}</strong>
+            </div>
+          </div>
+        </section>
+
+        {/* Proposals by Stage */}
+        <section className="dashboard-panel">
+          <div className="panel-header">
+            <div>
+              <h2>Proposals by Stage</h2>
+              <p>Current proposal workflow status</p>
+            </div>
+            <Link to="/proposals" className="panel-link">
+              View all
+              <ArrowIcon />
+            </Link>
+          </div>
+          <div className="stage-list">
+            {data.proposals_by_state.map(({state, count, label}) => (
+              <div className="stage-row" key={state}>
+                <div className="stage-name">
+                  <span className="stage-indicator" />
+                  {formatStage(label)}
+                </div>
+                <div className="stage-count">{count}</div>
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
 
-      <h3 style={{ marginTop: 8, marginBottom: 12 }}>Quick Actions</h3>
-      <div className="stat-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-        <Link to="/proposals/new" className="stat" style={{ textDecoration: "none", color: "inherit" }}>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>New Proposal →</div>
-          <div className="muted small">Create investment proposal</div>
-        </Link>
-        <Link to="/proposals" className="stat" style={{ textDecoration: "none", color: "inherit" }}>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>View Proposals →</div>
-          <div className="muted small">Track all proposals</div>
-        </Link>
-        <Link to="/limits" className="stat" style={{ textDecoration: "none", color: "inherit" }}>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>Investment Limits →</div>
-          <div className="muted small">Limit utilisation</div>
-        </Link>
-        <Link to="/reports" className="stat" style={{ textDecoration: "none", color: "inherit" }}>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>Export Reports →</div>
-          <div className="muted small">Download Excel reports</div>
-        </Link>
+      {/* ---------- Quick Actions ---------- */}
+      <div className="quick-actions-section">
+        <div className="section-heading">
+          <div>
+            <h2>Quick Actions</h2>
+            <p>Common tasks and frequently used areas</p>
+          </div>
+        </div>
+
+        <div className="quick-actions-grid">
+          <Link to="/proposals/new" className="quick-action-card">
+            <div>
+              <div className="quick-action-title">New Proposal</div>
+              <div className="quick-action-description">
+                Create a new investment proposal
+              </div>
+            </div>
+            <ArrowIcon />
+          </Link>
+
+          <Link to="/proposals" className="quick-action-card">
+            <div>
+              <div className="quick-action-title">View Proposals</div>
+              <div className="quick-action-description">
+                Track and manage proposals
+              </div>
+            </div>
+            <ArrowIcon />
+          </Link>
+
+          <Link to="/limits" className="quick-action-card">
+            <div>
+              <div className="quick-action-title">Investment Limits</div>
+              <div className="quick-action-description">
+                Review limit utilisation
+              </div>
+            </div>
+            <ArrowIcon />
+          </Link>
+
+          <Link to="/reports" className="quick-action-card">
+            <div>
+              <div className="quick-action-title">Export Reports</div>
+              <div className="quick-action-description">
+                Download finance reports
+              </div>
+            </div>
+            <ArrowIcon />
+          </Link>
+        </div>
       </div>
     </div>
   );
