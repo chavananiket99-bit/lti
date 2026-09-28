@@ -1,0 +1,252 @@
+import { useEffect, useState } from "react";
+import { mastersApi, questionsApi, usersApi } from "../services/endpoints";
+import Swal from "sweetalert2";
+import { Card, ErrorText, Field, SearchBar, Pagination, usePagination, extractErrorMessage } from "../components/ui.jsx";
+
+export default function Questions() {
+  const [questions, setQuestions] = useState([]);
+  const [invTypes, setInvTypes] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [error, setError] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [search, setSearch] = useState("");
+  const answerTypes = [
+    { id: "TEXT", name: "Text" },
+    { id: "BOOLEAN", name: "Yes / No" },
+    { id: "NUMBER", name: "Number" },
+    { id: "CHOICE", name: "Single Choice" },
+  ];
+
+
+  function load() {
+    questionsApi.list({ page_size: 1000 }).then((r) => setQuestions(r.data.results || r.data)).catch(setError);
+    mastersApi.investmentTypes().then((r) => setInvTypes(r.data.results || r.data)).catch(setError);
+    usersApi.roles().then((r) => setRoles(r.data.results || r.data)).catch(setError);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+  const filtered = questions.filter((q) => {
+    const value = search.toLowerCase().trim();
+    if (!value) return true;
+    return (
+      (q.text || "").toLowerCase().includes(value) ||
+      (q.role_name || "").toLowerCase().includes(value) ||
+      (q.investment_type_name || "").toLowerCase().includes(value)
+    );
+  });
+
+  const { page, setPage, total, totalPages, pageItems, from, to } = usePagination(filtered, 10);
+
+  return (
+    <div>
+      <div className="page-head">
+        <div className="header-content">
+          {/* <div className="page-eyebrow">CORPORATE FINANCE</div> */}
+          <h1 className="limits-title">Questions</h1>
+          <p className="limits-subtitle">(Questionnaire items by role and investment type)</p>
+          {/* <p className="limits-subtitle">
+            Manage and monitor approved investment limits and utilisation.
+          </p> */}
+        </div>
+        <button className="btn btn-primary limits-add-btn" onClick={() => setEditing({})}>+ Add Question</button>
+      </div>
+      <ErrorText error={error} />
+
+      <div className="master-table-card">
+        <div className="master-table-header">
+            <SearchBar
+          value={search}
+          onChange={(v) => {
+            setSearch(v);
+            setPage(1);
+          }}
+          placeholder="Search question, role or investment type..."
+        />
+          <div className="master-count">
+            <strong>{total}</strong> {total === 1 ? "question" : "questions"}
+          </div>
+        </div>
+
+        
+
+        <div className="master-table-wrapper">
+          <table className="table master-table">
+            <thead>
+              <tr>
+                <th>Question</th>
+                <th>Role</th>
+                <th>Investment Type</th>
+                <th>Active</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {pageItems.map((q) => (
+                <tr key={q.id}>
+                  <td>{q.text}</td>
+                  <td>{q.role_name}</td>
+                  <td>{q.investment_type_name}</td>
+                  <td>{q.is_active ? "Yes" : "No"}</td>
+                  <td><button className="btn btn-light btn-sm" onClick={() => setEditing(q)}>Edit</button></td>
+                </tr>
+              ))}
+
+              {total === 0 && (
+                <tr>
+                  <td colSpan={5} className="master-empty">
+                    <div className="master-empty-title">No questions found</div>
+                    <div className="master-empty-description">
+                      {search ? "Try changing your search criteria." : "There are currently no questions configured."}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {total > 0 && (
+          <Pagination
+            page={page}
+            setPage={setPage}
+            totalPages={totalPages}
+            from={from}
+            to={to}
+            total={total}
+            noun={{ one: "question", many: "questions" }}
+            onRefresh={load}
+          />
+        )}
+      </div>
+
+      {editing && (
+        <QuestionForm
+          question={editing}
+          questionText={editing.text || ""}
+          role={editing.role || ""}
+          roles={roles}
+          invType={invTypes}
+          answerTypes={answerTypes}
+          questions={questions}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function QuestionForm({ question, questionText, role, roles = [], invType = [], answerTypes = [], questions, onClose, onSaved }) {
+  const isNew = !question.id;
+  const [form, setForm] = useState({
+    text: question.text || "",
+    role: question.roles || [],
+    invType: question.investment_type || [],
+    answerType: question.answer_type || "",
+  });
+  const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const set = (k) => (e) => {
+    const value = e.target.value;
+    setForm({ ...form, [k]: value });
+    setFieldErrors((prev) => ({ ...prev, [k]: undefined }));
+  };
+
+  const setMulti = (k) => (e) => {
+    // collect selected options' values as array
+    const opts = Array.from(e.target.selectedOptions || []).map((o) => o.value);
+    setForm({ ...form, [k]: opts });
+    setFieldErrors((prev) => ({ ...prev, [k]: undefined }));
+  };
+
+  function validate() {
+    const errors = {};
+    if (!form.text.trim()) errors.text = "Question text is required.";
+    else if (form.text.trim().length < 5)
+      errors.text = "Question must be at least 5 characters.";
+    if (!form.role || (Array.isArray(form.role) && form.role.length === 0)) errors.role = "Please select at least one role.";
+    if (!form.invType || (Array.isArray(form.invType) && form.invType.length === 0)) errors.invType = "Please select at least one investment type.";
+    if (!form.answerType) errors.answerType = "Please select an answer type.";
+    return errors;
+  }
+
+  async function save() {
+    setError(null);
+    const errors = validate();
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+    try {
+      const payload = { text: form.text.trim() };
+      if (form.role) payload.roles = form.role;
+      if (form.invType) payload.investment_type = form.invType;
+      if (form.answerType) payload.answer_type = form.answerType;
+      if (isNew) await questionsApi.create(payload);
+      else await questionsApi.update(question.id, payload);
+      onSaved();
+      Swal.fire({
+        icon: "success",
+        title: isNew ? "Question added" : "Question updated",
+        text: isNew ? "Question added successfully" : "Question updated successfully",
+        timer: 1500,
+        showConfirmButton: false,
+      });
+    } catch (err) {
+      setError(err);
+      const msg = extractErrorMessage(err) || extractErrorMessage(err.response?.data) || err.message || "Save failed";
+      Swal.fire({ icon: "error", title: isNew ? "Failed to add question" : "Failed to update question", text: msg, });
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <Card title={isNew ? "Add Question" : "Edit Question"}>
+          <div className="form-grid">
+            <Field label="Question" required error={fieldErrors.text}><input value={form.text} onChange={set("text")} /></Field>
+            <Field label="Role" required error={fieldErrors.role}>
+              <select multiple value={form.role} onChange={setMulti("role")}>
+                {roles.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Investment Type" required error={fieldErrors.invType}>
+              <select multiple value={form.invType} onChange={setMulti("invType")}>
+                {invType.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Answer Type" required error={fieldErrors.answerType}><select value={form.answerType} onChange={set("answerType")}>
+                <option value="">Select answer type</option>
+                {answerTypes.map((a, idx) => {
+                  const val = typeof a === "string" ? a : a.id;
+                  const label = typeof a === "string" ? a : a.name;
+                  return (
+                    <option key={val ?? idx} value={val}>
+                      {label}
+                    </option>
+                  );
+                })}
+              </select></Field>
+    
+          </div>
+          <ErrorText error={error} />
+          <div className="btn-row">
+            <button className="btn btn-primary" onClick={save}>Save</button>
+            <button className="btn btn-light" onClick={onClose}>Cancel</button>
+          </div>
+        </Card>
+      </div>
+    </div>  
+  );
+}
