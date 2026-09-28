@@ -1,0 +1,344 @@
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { mastersApi, proposalsApi } from "../services/endpoints";
+import { Field, ErrorText, Card } from "../components/ui.jsx";
+const LIMIT_TYPES = [
+  ["FUNGIBLE", "Fungible"],
+  ["NON_FUNGIBLE", "Non-Fungible"],
+  ["SURPLUS", "Surplus"],
+  ["TEMPORARY", "Temporary"],
+];
+
+export default function ProposalCreate() {
+  const navigate = useNavigate();
+
+  const formatDateLocal = (d) => {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  };
+  const toLocalDate = (dateStr) => {
+    if (!dateStr) return null;
+    const [y, m, d] = dateStr.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  };
+  const TODAY_STR = formatDateLocal(new Date());
+
+  const [masters, setMasters] = useState({
+    companies: [],
+    currencies: [],
+    types: [],
+    years: [],
+  });
+  const [form, setForm] = useState({
+    company: "",
+    investment_type: "",
+    financial_year: "",
+    currency: "",
+    limit_type: "",
+    counterparty: "",
+    amount: "",
+    purpose: "",
+    tenure_months: "",
+    interest_rate: "",
+    value_date: TODAY_STR,
+  });
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [companyLimits, setCompanyLimits] = useState(null);
+
+  // Purpose constraints
+  const PURPOSE_MAX = 5000;
+  // Allowed characters: letters (unicode), digits, whitespace, and a small set of punctuation
+  // Use the 'u' flag so \p{L} (unicode letters) works correctly.
+  const PURPOSE_ALLOWED_REGEX = /^[\p{L}0-9\s.,\-'":;()\/+%?=\n\r]*$/u;
+  const PURPOSE_INVALID_CHARS_RE = /[^\p{L}0-9\s.,\-'":;()\/+%?=\n\r]/u;
+  // disallow three or more repeated special characters like @@@@
+  const REPEATED_SPECIAL_RE = /([^0-9A-Za-z\s])\1{2,}/u;
+
+  useEffect(() => {
+    Promise.all([
+      mastersApi.companies({ is_active: true }),
+      mastersApi.currencies(),
+      mastersApi.investmentTypes(),
+      mastersApi.financialYears(),
+    ]).then(([c, cur, t, y]) => {
+      const companies = c.data.results || c.data;
+      setMasters({
+        companies,
+        currencies: cur.data.results || cur.data,
+        types: t.data.results || t.data,
+        years: y.data.results || y.data,
+      });
+      // Do not auto-select a company even when only one is returned.
+    });
+  }, []);
+
+  // Fetch limits for selected company (and optionally FY / currency) so the UI
+  // can show approved / outstanding / available balances when user picks a company.
+  useEffect(() => {
+    async function fetchLimits() {
+      if (!form.company) {
+        setCompanyLimits(null);
+        return;
+      }
+      try {
+        const params = { company: form.company };
+        if (form.financial_year) params.financial_year = form.financial_year;
+        if (form.currency) params.currency = form.currency;
+        const res = await mastersApi.limits(params);
+        const items = res.data.results || res.data || [];
+        // If multiple limits exist, prefer the one matching selected limit_type if present
+        let chosen = null;
+        if (items.length === 1) chosen = items[0];
+        else if (items.length > 1) {
+          chosen = items.find((l) => String(l.limit_type) === String(form.limit_type)) || items[0];
+        }
+        setCompanyLimits(chosen || null);
+      } catch (err) {
+        setCompanyLimits(null);
+      }
+    }
+    fetchLimits();
+  }, [form.company, form.financial_year, form.currency, form.limit_type]);
+
+  const set = (k) => (e) => {
+    let value = e.target.value;
+    // sanitize for purpose on change: remove invalid chars
+    if (k === "purpose") {
+      const sanitized = value.replace(PURPOSE_INVALID_CHARS_RE, "");
+      if (sanitized !== value) value = sanitized;
+    }
+
+    setForm((prev) => ({
+      ...prev,
+      [k]: value,
+    }));
+
+    setFieldErrors((prev) => {
+      const copy = { ...(prev || {}) };
+      if (k === "purpose") {
+        if (REPEATED_SPECIAL_RE.test(value)) {
+          copy.purpose = "Purpose contains repeated special characters";
+        } else if (!PURPOSE_ALLOWED_REGEX.test(value)) {
+          copy.purpose = "Purpose contains invalid characters";
+        } else if (value.length > PURPOSE_MAX) {
+          copy.purpose = `Purpose must be at most ${PURPOSE_MAX} characters`;
+        } else {
+          delete copy.purpose;
+        }
+        return copy;
+      }
+
+      if (!prev || !prev[k]) return prev;
+      delete copy[k];
+      return copy;
+    });
+  };
+
+  function validate() {
+    const errors = {};
+    if (!form.company) errors.company = "Company is required";
+    if (!form.investment_type) errors.investment_type = "Investment type is required";
+    if (!form.financial_year) errors.financial_year = "Financial year is required";
+    if (!form.currency) errors.currency = "Currency is required";
+    if (!form.limit_type) errors.limit_type = "Limit type is required";
+    if (!form.amount) errors.amount = "Amount is required";
+    else if (Number(form.amount) <= 0) errors.amount = "Amount must be greater than zero";
+
+    // Purpose
+    if (!form.purpose) errors.purpose = "Purpose is required";
+    else if (form.purpose.length > PURPOSE_MAX) errors.purpose = `Purpose must be at most ${PURPOSE_MAX} characters`;
+    else if (REPEATED_SPECIAL_RE.test(form.purpose)) errors.purpose = "Purpose contains repeated special characters";
+    else if (!PURPOSE_ALLOWED_REGEX.test(form.purpose)) errors.purpose = "Purpose contains invalid characters";
+
+    // Tenure
+    if (form.tenure_months === "" || form.tenure_months === null || form.tenure_months === undefined) {
+      errors.tenure_months = "Tenure is required";
+    } else {
+      const v = Number(form.tenure_months);
+      if (!Number.isInteger(v) || v <= 0) errors.tenure_months = "Tenure must be a positive integer";
+    }
+
+    // Value date
+    if (!form.value_date) {
+      errors.value_date = "Value date is required";
+    } else {
+      const selected = toLocalDate(form.value_date);
+      const today = toLocalDate(TODAY_STR);
+      if (!selected || Number.isNaN(selected.getTime())) errors.value_date = "Value date is invalid";
+      else if (selected < today) errors.value_date = "Value date cannot be in the past";
+    }
+
+    // Interest rate
+    if (form.interest_rate === "" || form.interest_rate === null || form.interest_rate === undefined) {
+      errors.interest_rate = "Interest rate is required";
+    } else {
+      const r = Number(form.interest_rate);
+      if (Number.isNaN(r) || r < 0) errors.interest_rate = "Interest rate must be a non-negative number";
+    }
+
+    return errors;
+  }
+
+  async function submit(e) {
+    e.preventDefault();
+    setError(null);
+    const errors = validate();
+    if (Object.keys(errors).length) {
+      setFieldErrors(errors);
+      return;
+    }
+    setBusy(true);
+    try {
+      const payload = { ...form };
+      // If optional fields are empty, remove them so backend applies defaults
+      ["tenure_months", "interest_rate", "value_date"].forEach((k) => {
+        if (!payload[k]) delete payload[k];
+      });
+      const { data } = await proposalsApi.create(payload);
+      setFieldErrors({});
+      navigate(`/proposals/${data.id}`);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="proposal-create-page">
+      <div className="proposal-page-header">
+        <div>
+          <h1>New Investment Proposal</h1>
+        </div>
+      </div>
+
+      <Card>
+        {/* Company limits summary panel - updates when company, FY, currency or limit type changes */}
+        <div className="company-limits-panel">
+          {companyLimits ? (
+            <Card title="Company Limits">
+              <div className="company-limits-grid">
+                <div>
+                  <div className="limits-label">Approved</div>
+                  <div className="limits-value">{companyLimits.currency_code} {Number(companyLimits.investment_approved || 0).toLocaleString()}</div>
+                </div>
+                <div>
+                  <div className="limits-label">Disbursed</div>
+                  <div className="limits-value">{companyLimits.currency_code} {Number(companyLimits.current_outstanding || 0).toLocaleString()}</div>
+                </div>
+                <div>
+                  <div className="limits-label">Available</div>
+                  <div className="limits-value">{companyLimits.currency_code} {Number(companyLimits.balance_available || 0).toLocaleString()}</div>
+                </div>
+              </div>
+            </Card>
+          ) : (
+            form.company && (
+              <Card>
+                <div className="company-limits-empty">No limit configured for selected company/criteria.</div>
+              </Card>
+            )
+          )}
+        </div>
+
+        <form noValidate onSubmit={submit} className="form-grid proposal-form">
+          <Field label="Company" error={fieldErrors.company}>
+            <select value={form.company} onChange={set("company")}>
+              <option value="">Select company</option>
+              {masters.companies.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Investment Type" error={fieldErrors.investment_type}>
+            <select value={form.investment_type} onChange={set("investment_type")}>
+              <option value="">Select type</option>
+              {masters.types.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Financial Year" error={fieldErrors.financial_year}>
+            <select value={form.financial_year} onChange={set("financial_year")}>
+              <option value="">Select year</option>
+              {masters.years.map((y) => (
+                <option key={y.id} value={y.id}>
+                  {y.code}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Currency" error={fieldErrors.currency}>
+            <select value={form.currency} onChange={set("currency")}>
+              <option value="">Select currency</option>
+              {masters.currencies.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.code}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Limit Type" error={fieldErrors.limit_type}>
+            <select value={form.limit_type} onChange={set("limit_type")} required>
+              <option value="">Select Limit Type</option>
+              {LIMIT_TYPES.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          {/* company limits panel moved above the form */}
+
+          <Field label="Amount" error={fieldErrors.amount}>
+            <input type="number" step="0.01" value={form.amount} onChange={set("amount")} required placeholder="Enter amount" />
+          </Field>
+
+          <Field label="Tenure (months)" error={fieldErrors.tenure_months}>
+            <input type="number" value={form.tenure_months} onChange={set("tenure_months")} placeholder="Enter tenure" min="1" step="1" required />
+          </Field>
+
+          <Field label="Value Date" error={fieldErrors.value_date}>
+            <input type="date" value={form.value_date} onChange={set("value_date")} required min={TODAY_STR} />
+          </Field>
+
+          <Field label="Interest Rate (%)" error={fieldErrors.interest_rate}>
+            <input type="number" step="0.001" value={form.interest_rate} onChange={set("interest_rate")} placeholder="Enter interest rate" min="0" required />
+          </Field>
+
+          <div className="proposal-purpose">
+            <Field label="Purpose" error={fieldErrors.purpose}>
+              <textarea value={form.purpose} onChange={set("purpose")} required rows={4} placeholder="Enter purpose of the investment" maxLength={PURPOSE_MAX} />
+              <div className="field-hint purpose-counter">{form.purpose ? form.purpose.length : 0}/{PURPOSE_MAX} characters</div>
+            </Field>
+          </div>
+
+          <div className="proposal-form-actions">
+            <ErrorText error={error} />
+            <div className="proposal-buttons">
+              <button type="button" className="btn btn-secondary" onClick={() => navigate("/proposals")} disabled={busy}>
+                Cancel
+              </button>
+              <button type="submit" className="btn btn-primary" disabled={busy}>
+                {busy ? "Saving..." : "Create Draft"}
+              </button>
+            </div>
+          </div>
+        </form>
+      </Card>
+    </div>
+  );
+}
