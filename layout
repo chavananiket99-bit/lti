@@ -1,0 +1,178 @@
+import { useEffect, useRef, useState } from "react";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth.jsx";
+import mahindraRiseLogo from "../assets/mahindra-rise-logo.png";
+function getInitials(user) {
+  if (user?.first_name && user?.last_name) {
+    return (user.first_name[0] + user.last_name[0]).toUpperCase();
+  }
+  if (user?.full_name) {
+    const parts = user.full_name.trim().split(/\s+/);
+    return parts.length > 1
+      ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+      : parts[0].slice(0, 2).toUpperCase();
+  }
+  return (user?.username || "U").slice(0, 2).toUpperCase();
+}
+export default function Layout() {
+  const { user, logout, isAdmin } = useAuth();
+  const navigate = useNavigate();
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileRef = useRef(null);
+  const nav = [
+    {
+      to: "/",
+      label: "Dashboard",
+      end: true,
+    },
+    {
+      to: "/proposals",
+      label: "Proposals",
+    },
+    {
+      to: "/limits",
+      label: "Limits",
+    },
+    {
+      to: "/reports",
+      label: "Reports",
+    },
+    {
+      to: "/audit",
+      label: "Audit",
+    },
+  ];
+  if (isAdmin()) {
+    nav.push({
+      to: "/users",
+      label: "Users" },{ to: "/companies", label: "Company",
+    },
+  { to: "/questions", label: "Questions",
+    },{
+      to: "/currency",
+      label: "Currency",
+    },{
+      to: "/approval-config",
+      label: "Approval Config",
+    },);
+  }
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (profileRef.current && !profileRef.current.contains(event.target)) {
+        setProfileOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+  function handleLogout() {
+    setProfileOpen(false);
+    logout();
+    navigate("/login");
+  }
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        {/* ================================
+           Mahindra Brand
+          ================================= */}
+        <div className="header-brand">
+          <img
+            src={mahindraRiseLogo}
+            alt="Mahindra Rise"
+            className="mahindra-rise-logo header-logo"
+          />
+        </div>
+        {/* ================================
+           Main Navigation
+          ================================= */}
+        <nav className="main-nav" aria-label="Main navigation">
+          {nav.map((n) => (
+            <NavLink
+              key={n.to}
+              to={n.to}
+              end={n.end}
+              className={({ isActive }) =>
+                `nav-link ${isActive ? "active" : ""}`
+              }
+            >
+              {n.label}
+            </NavLink>
+          ))}
+        </nav>
+        {/* ================================
+           User / Profile
+          ================================= */}
+        <div className="profile-area" ref={profileRef}>
+          <button
+            type="button"
+            className={`profile-trigger ${profileOpen ? "open" : ""}`}
+            onClick={() => setProfileOpen((prev) => !prev)}
+            aria-expanded={profileOpen}
+          >
+            <div className="user-details">
+              <div className="user-name">
+                {user?.full_name || user?.username}
+              </div>
+              <div className="role-badge">{user?.role_name || "User"}</div>
+            </div>
+            <div className="avatar">{getInitials(user)}</div>
+            <span className="dropdown-arrow">{profileOpen ? "▲" : "▼"}</span>
+          </button>
+          {/* Dropdown */}
+          {profileOpen && (
+            <div className="profile-dropdown">
+              <div className="dropdown-user">
+                <div className="dropdown-avatar">{getInitials(user)}</div>
+                <div>
+                  <div className="dropdown-user-name">
+                    {user?.full_name || user?.username}
+                  </div>
+                  <div className="dropdown-user-role">
+                    {user?.role_name || "User"}
+                  </div>
+                </div>
+              </div>
+              <div className="dropdown-divider" />
+              <button
+                type="button"
+                className="dropdown-item"
+                onClick={() => setProfileOpen(false)}
+              >
+                <span className="dropdown-icon">◯</span>
+                <span>My Profile</span>
+              </button>
+              <button
+                type="button"
+                className="dropdown-item"
+                onClick={() => setProfileOpen(false)}
+              >
+                <span className="dropdown-icon">⚙</span>
+                <span>Settings</span>
+              </button>
+              <div className="dropdown-divider" />
+              <button
+                type="button"
+                className="dropdown-item logout-item"
+                onClick={handleLogout}
+              >
+                <span className="dropdown-icon">↪</span>
+                <span>Logout</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </header>
+      <main className="content">
+        <Outlet />
+      </main>
+      <footer className="footer">
+        <span>© {new Date().getFullYear()} LTI / LNI Portal</span>
+        <span className="footer-separator">|</span>
+        <span>Corporate Finance</span>
+      </footer>
+    </div>
+  );
+}
