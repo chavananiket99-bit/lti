@@ -1,6 +1,76 @@
 import { useEffect, useState } from "react";
 import { usersApi, mastersApi } from "../services/endpoints";
-import { Card, ErrorText, Field } from "../components/ui.jsx";
+import Swal from "sweetalert2";
+import { Card, ErrorText, Field, Pagination, usePagination, extractErrorMessage } from "../components/ui.jsx";
+
+function EditIcon() {
+  return (
+    <svg viewBox="0 0 20 20" className="users-edit-icon">
+      <path
+        d="M4 14.5V17h2.5L15 8.5 11.5 5 3 13.5l1 1Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="m10.8 5.7 3.5 3.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="users-search-icon">
+      <circle
+        cx="11"
+        cy="11"
+        r="6.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="m16 16 4.5 4.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function RoleBadge({ role }) {
+  return <span className="user-role-badge">{role || "-"}</span>;
+}
+
+function companyText(user) {
+  if (Array.isArray(user.company_names) && user.company_names.length) {
+    return user.company_names.join(", ");
+  }
+  return user.company_name || "-";
+}
+
+function ActiveBadge({ active }) {
+  return (
+    <span
+      className={
+        active
+          ? "user-status-badge user-status-active"
+          : "user-status-badge user-status-inactive"
+      }
+    >
+      <span className="user-status-dot" />
+      {active ? "Active" : "Inactive"}
+    </span>
+  );
+}
 
 export default function Users() {
   const [users, setUsers] = useState([]);
@@ -8,42 +78,234 @@ export default function Users() {
   const [companies, setCompanies] = useState([]);
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [search, setSearch] = useState("");
 
-  function load() {
-    usersApi.list().then((r) => setUsers(r.data.results || r.data)).catch(setError);
+  async function load() {
+    setError(null);
+
+    try {
+      let page = 1;
+      const allUsers = [];
+
+      while (true) {
+        const r = await usersApi.list({ page, page_size: 200 });
+        const data = r.data;
+
+        if (Array.isArray(data)) {
+          setUsers(data);
+          return;
+        }
+
+        allUsers.push(...(data.results || []));
+        if (!data.next) break;
+        page += 1;
+      }
+
+      setUsers(allUsers);
+    } catch (err) {
+      setError(err);
+    }
   }
 
   useEffect(() => {
     load();
-    usersApi.roles().then((r) => setRoles(r.data.results || r.data));
-    mastersApi.companies().then((r) => setCompanies(r.data.results || r.data));
+
+    usersApi
+      .roles()
+      .then((r) => setRoles(r.data.results || r.data))
+      .catch(setError);
+
+    mastersApi
+      .companies()
+      .then((r) => setCompanies(r.data.results || r.data))
+      .catch(setError);
   }, []);
 
+  const filteredUsers = users.filter((u) => {
+    const value = search.toLowerCase().trim();
+
+    if (!value) return true;
+
+    return (
+      (u.username || "").toLowerCase().includes(value) ||
+      (u.full_name || "").toLowerCase().includes(value) ||
+      (u.email || "").toLowerCase().includes(value) ||
+      (u.role_name || "").toLowerCase().includes(value) ||
+      companyText(u).toLowerCase().includes(value)
+    );
+  });
+
+  const { page, setPage, total, totalPages, pageItems, from, to } = usePagination(filteredUsers, 10);
+
   return (
-    <div>
-      <div className="page-head">
-        <h2>Users &amp; Roles</h2>
-        <button className="btn btn-success" onClick={() => setEditing({})}>+ Add User</button>
+    <div className="users-page">
+      {/* =====================================================
+          PAGE HEADER
+          ===================================================== */}
+
+      <div className="users-header">
+        <div className="header-content">
+          {/* <div className="page-eyebrow">ADMINISTRATION</div> */}
+
+          <h1 className="users-title">Users &amp; Roles</h1>
+          <p className="limits-subtitle">(Portal users, roles and access status)</p>
+
+          {/* <p className="users-subtitle">
+            Manage portal users, roles and company access.
+          </p> */}
+        </div>
+
+        <button
+          type="button"
+          className="btn btn-primary users-add-btn"
+          onClick={() => setEditing({})}
+        >
+          <span>+</span>
+          Add User
+        </button>
       </div>
+
       <ErrorText error={error} />
-      <table className="table">
-        <thead>
-          <tr><th>Username</th><th>Name</th><th>Email</th><th>Role</th><th>Company</th><th>Active</th><th></th></tr>
-        </thead>
-        <tbody>
-          {users.map((u) => (
-            <tr key={u.id}>
-              <td>{u.username}</td>
-              <td>{u.full_name}</td>
-              <td>{u.email}</td>
-              <td>{u.role_name}</td>
-              <td>{u.company_name || "-"}</td>
-              <td>{u.is_active ? "Yes" : "No"}</td>
-              <td><button className="btn btn-light btn-sm" onClick={() => setEditing(u)}>Edit</button></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+
+      {/* =====================================================
+          USER REGISTER
+          ===================================================== */}
+
+      <div className="users-table-card">
+        <div className="users-table-header">
+          <div className="users-toolbar">
+          <div className="users-search-wrapper">
+            <SearchIcon />
+
+            <input
+              type="text"
+              className="users-search"
+              placeholder="Search username, name, email or role..."
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+            />
+
+            {search && (
+              <button
+                type="button"
+                className="users-search-clear"
+                onClick={() => setSearch("")}
+                aria-label="Clear search"
+              >
+                ×
+              </button>
+            )}
+          </div>
+          </div>
+          <div className="users-count">
+            <strong>{total}</strong>{" "}
+            {total === 1 ? "user" : "users"}
+          </div>
+        </div>
+
+       
+
+        <div className="users-table-wrapper">
+          <table className="table users-table">
+            <thead>
+              <tr>
+                <th>Username</th>
+
+                <th>Name</th>
+
+                <th>Email</th>
+
+                <th>Role</th>
+
+                <th>Company</th>
+
+                <th>Access</th>
+
+                <th className="users-action-column">Action</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {pageItems.map((u) => (
+                <tr key={u.id}>
+                  <td>
+                    <div className="users-username">{u.username}</div>
+                  </td>
+
+                  <td>
+                    <div className="users-name">{u.full_name || "-"}</div>
+                  </td>
+
+                  <td>
+                    <div className="users-email">{u.email || "-"}</div>
+                  </td>
+
+                  <td>
+                    <RoleBadge role={u.role_name} />
+                  </td>
+
+                  <td>
+                    <div className="users-company">{companyText(u)}</div>
+                  </td>
+
+                  <td>
+                    <ActiveBadge active={u.is_active} />
+                  </td>
+
+                  <td>
+                    <button
+                      type="button"
+                      className="users-edit-btn"
+                      onClick={() => setEditing(u)}
+                    >
+                      <EditIcon />
+                      Edit
+                    </button>
+                  </td>
+                </tr>
+              ))}
+
+              {filteredUsers.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="users-empty">
+                    <div className="users-empty-title">No users found</div>
+
+                    <div className="users-empty-description">
+                      {search
+                        ? "Try changing your search criteria."
+                        : "There are currently no users configured."}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* =====================================================
+            FOOTER
+            ===================================================== */}
+
+        {filteredUsers.length > 0 && (
+          <Pagination
+            page={page}
+            setPage={setPage}
+            totalPages={totalPages}
+            from={from}
+            to={to}
+            total={total}
+            noun={{ one: "user", many: "users" }}
+            onRefresh={load}
+          />
+        )}
+      </div>
+
+      {/* =====================================================
+          ADD / EDIT FORM
+          ===================================================== */}
 
       {editing && (
         <UserForm
@@ -61,8 +323,14 @@ export default function Users() {
   );
 }
 
+/* =========================================================
+   USER FORM
+   ========================================================= */
+
 function UserForm({ user, roles, companies, onClose, onSaved }) {
   const isNew = !user.id;
+  const initialCompanyIds = user.company_ids || (user.company ? [user.company] : []);
+
   const [form, setForm] = useState({
     username: user.username || "",
     email: user.email || "",
@@ -70,55 +338,244 @@ function UserForm({ user, roles, companies, onClose, onSaved }) {
     last_name: user.last_name || "",
     role: user.role || "",
     company: user.company || "",
+    companies: initialCompanyIds,
     is_active: user.is_active ?? true,
     password: "",
   });
+
   const [error, setError] = useState(null);
-  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const [busy, setBusy] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
+
+  const selectedRole = roles.find((r) => String(r.id) === String(form.role));
+  const isGroupEntityUser = selectedRole?.code === "GROUP_ENTITY_USER";
+
+  const set = (k) => (e) => {
+    const value = e.target.value;
+    setForm((prev) => {
+      if (k !== "role") {
+        return {
+          ...prev,
+          [k]: value,
+        };
+      }
+
+      const nextRole = roles.find((r) => String(r.id) === String(value));
+      const nextIsGroupEntity = nextRole?.code === "GROUP_ENTITY_USER";
+      const nextCompanies = nextIsGroupEntity
+        ? prev.companies.length
+          ? prev.companies
+          : prev.company
+            ? [Number(prev.company)]
+            : []
+        : [];
+
+      return {
+        ...prev,
+        role: value,
+        companies: nextCompanies,
+        company: nextIsGroupEntity
+          ? (nextCompanies[0] || "")
+          : prev.company,
+      };
+    });
+    setFieldErrors((prev) => ({ ...prev, [k]: undefined }));
+  };
+
+  const setMultiCompanies = (e) => {
+    const selected = Array.from(e.target.selectedOptions).map((option) => Number(option.value));
+    setForm((prev) => ({
+      ...prev,
+      companies: selected,
+      company: selected.length ? selected[0] : "",
+    }));
+    setFieldErrors((prev) => ({ ...prev, companies: undefined, company: undefined }));
+  };
+
+  function validate() {
+    const errors = {};
+    if (!form.username.trim()) errors.username = "Token ID is required.";
+    if (!form.email.trim()) errors.email = "Email is required.";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim()))
+      errors.email = "Enter a valid email address.";
+    if (!form.first_name.trim()) errors.first_name = "First name is required.";
+    if (!form.last_name.trim()) errors.last_name = "Last name is required.";
+    if (!form.role) errors.role = "Please select a role.";
+    if (isGroupEntityUser) {
+      if (!form.companies.length) errors.companies = "Please select at least one company.";
+    } else if (!form.company) {
+      errors.company = "Please select a company.";
+    }
+    return errors;
+  }
 
   async function save() {
     setError(null);
+    const errors = validate();
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+    setBusy(true);
+
     try {
       const payload = { ...form };
-      if (!payload.company) delete payload.company;
-      if (!isNew && !payload.password) delete payload.password;
-      if (isNew) await usersApi.create(payload);
-      else await usersApi.update(user.id, payload);
+
+      payload.companies = (payload.companies || []).map((id) => Number(id));
+      if (isGroupEntityUser) {
+        payload.company = payload.companies[0] || "";
+      } else {
+        payload.company = payload.company ? Number(payload.company) : "";
+        payload.companies = payload.company ? [payload.company] : [];
+      }
+
+      if (!payload.company) {
+        delete payload.company;
+      }
+
+      if (!payload.companies?.length) {
+        delete payload.companies;
+      }
+
+      if (!isNew && !payload.password) {
+        delete payload.password;
+      }
+
+      if (isNew) {
+        await usersApi.create(payload);
+      } else {
+        await usersApi.update(user.id, payload);
+      }
+
       onSaved();
+      Swal.fire({
+        icon: "success",
+        title: isNew ? "User added" : "User updated",
+        text: isNew ? "User added successfully" : "User updated successfully",
+        timer: 1500,
+        showConfirmButton: false,
+      });
     } catch (err) {
       setError(err);
+      const msg = extractErrorMessage(err) || extractErrorMessage(err.response?.data) || err.message || "Save failed";
+      Swal.fire({ icon: "error", title: isNew ? "Failed to add user" : "Failed to update user", text: msg });
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal user-modal" onClick={(e) => e.stopPropagation()}>
         <Card title={isNew ? "Add User" : "Edit User"}>
-          <div className="form-grid">
-            <Field label="Username"><input value={form.username} onChange={set("username")} disabled={!isNew} /></Field>
-            <Field label="Email"><input value={form.email} onChange={set("email")} /></Field>
-            <Field label="First Name"><input value={form.first_name} onChange={set("first_name")} /></Field>
-            <Field label="Last Name"><input value={form.last_name} onChange={set("last_name")} /></Field>
-            <Field label="Role">
+          <div className="user-form-grid">
+            <Field label="Token ID" required error={fieldErrors.username}>
+              <input
+                value={form.username}
+                onChange={set("username")}
+                disabled={!isNew}
+                placeholder="Enter username"
+              />
+            </Field>
+
+            <Field label="Email" required error={fieldErrors.email}>
+              <input
+                type="email"
+                value={form.email}
+                onChange={set("email")}
+                placeholder="Enter email"
+              />
+            </Field>
+
+            <Field label="First Name" required error={fieldErrors.first_name}>
+              <input
+                value={form.first_name}
+                onChange={set("first_name")}
+                placeholder="Enter first name"
+              />
+            </Field>
+
+            <Field label="Last Name" required error={fieldErrors.last_name}>
+              <input
+                value={form.last_name}
+                onChange={set("last_name")}
+                placeholder="Enter last name"
+              />
+            </Field>
+
+            <Field label="Role" required error={fieldErrors.role}>
               <select value={form.role} onChange={set("role")}>
                 <option value="">Select role</option>
-                {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+
+                {roles.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
               </select>
             </Field>
-            <Field label="Company (optional)">
-              <select value={form.company} onChange={set("company")}>
-                <option value="">None</option>
-                {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </Field>
+
+            {isGroupEntityUser ? (
+              <Field label="Companies" required error={fieldErrors.companies}>
+                <select
+                  multiple
+                  value={form.companies.map(String)}
+                  onChange={setMultiCompanies}
+                  size={Math.min(6, Math.max(3, companies.length))}
+                >
+                  {companies.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            ) : (
+              <Field label="Company" required error={fieldErrors.company}>
+                <select value={form.company} onChange={set("company")}>
+                  <option value="">Select Company</option>
+
+                  {companies.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
+{/* 
             <Field label={isNew ? "Password" : "New Password (optional)"}>
-              <input type="password" value={form.password} onChange={set("password")} />
-            </Field>
+              <input
+                type="password"
+                value={form.password}
+                onChange={set("password")}
+                placeholder={
+                  isNew
+                    ? "Enter password"
+                    : "Leave blank to keep current password"
+                }
+              />
+            </Field> */}
           </div>
+
           <ErrorText error={error} />
-          <div className="btn-row">
-            <button className="btn btn-primary" onClick={save}>Save</button>
-            <button className="btn btn-light" onClick={onClose}>Cancel</button>
+
+          <div className="user-modal-actions">
+            <button
+              type="button"
+              className="btn btn-light"
+              onClick={onClose}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={save}
+              disabled={busy}
+            >
+              {busy ? "Saving..." : isNew ? "Add User" : "Save Changes"}
+            </button>
           </div>
         </Card>
       </div>
