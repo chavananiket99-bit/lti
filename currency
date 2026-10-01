@@ -1,0 +1,293 @@
+import { useEffect, useState } from "react";
+import Swal from "sweetalert2";
+
+import { mastersApi } from "../services/endpoints";
+import {
+  Card,
+  ErrorText,
+  Field,
+  Pagination,
+  SearchBar,
+  extractErrorMessage,
+  usePagination,
+} from "../components/ui.jsx";
+
+export default function Currency() {
+  const [currencies, setCurrencies] = useState([]);
+  const [error, setError] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [search, setSearch] = useState("");
+
+  function load() {
+    mastersApi
+      .currencies()
+      .then((r) => setCurrencies(r.data.results || r.data))
+      .catch(setError);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function handleToggleActive(c) {
+    const targetActive = !c.is_active;
+    const result = await Swal.fire({
+      title: targetActive ? "Activate currency?" : "Disable currency?",
+      text: targetActive
+        ? "This will activate the currency."
+        : "This will disable the currency. It won't be used in user flows.",
+      icon: targetActive ? "question" : "warning",
+      showCancelButton: true,
+      confirmButtonText: targetActive ? "Yes, activate it" : "Yes, disable it",
+    });
+    if (!result.isConfirmed) return;
+    try {
+      if (targetActive) await mastersApi.activate("currencies", c.id);
+      else await mastersApi.deactivate("currencies", c.id);
+      Swal.fire({ icon: "success", title: targetActive ? "Currency activated" : "Currency disabled", timer: 1400, showConfirmButton: false });
+      load();
+    } catch (err) {
+      const msg = extractErrorMessage(err) || err.message || "Failed to update currency status";
+      Swal.fire({ icon: "error", title: "Failed", text: msg });
+    }
+  }
+
+  const filtered = currencies.filter((c) => {
+    const value = search.toLowerCase().trim();
+    if (!value) return true;
+    return (
+      (c.name || "").toLowerCase().includes(value) ||
+      (c.code || "").toLowerCase().includes(value) ||
+      (c.symbol || "").toLowerCase().includes(value)
+    );
+  });
+
+  const { page, setPage, total, totalPages, pageItems, from, to } = usePagination(filtered, 10);
+
+  return (
+    <div>
+      <div className="page-head">
+        <div className="header-content">
+          <h1 className="users-title">Currency</h1>
+          <p className="limits-subtitle">(Currency master details and symbols)</p>
+        </div>
+        <button className="btn btn-primary limits-add-btn" onClick={() => setEditing({})}>
+          + Add Currency
+        </button>
+      </div>
+
+      <ErrorText error={error} />
+
+      <div className="master-table-card">
+        <div className="master-table-header">
+          <SearchBar
+            value={search}
+            onChange={(v) => {
+              setSearch(v);
+              setPage(1);
+            }}
+            placeholder="Search by name, code or symbol..."
+          />
+          <div className="master-count">
+            <strong>{total}</strong> {total === 1 ? "currency" : "currencies"}
+          </div>
+        </div>
+
+        <div className="master-table-wrapper">
+          <table className="table master-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Code</th>
+                <th>Symbol</th>
+                <th>Active</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pageItems.map((c) => (
+                <tr key={c.id}>
+                  <td>{c.name}</td>
+                  <td>{c.code}</td>
+                  <td>{c.symbol || "-"}</td>
+                  <td>{c.is_active ? "Yes" : "No"}</td>
+                  <td>
+                    <button className="btn btn-light btn-sm" onClick={() => setEditing(c)}>
+                      Edit
+                    </button>
+                    <button className={c.is_active ? "btn btn-danger btn-sm" : "btn btn-success btn-sm"} onClick={() => handleToggleActive(c)} style={{ marginLeft: "8px" }}>
+                      {c.is_active ? "Inactive" : "Active"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+
+              {total === 0 && (
+                <tr>
+                  <td colSpan={5} className="master-empty">
+                    <div className="master-empty-title">No currencies found</div>
+                    <div className="master-empty-description">
+                      {search
+                        ? "Try changing your search criteria."
+                        : "There are currently no currencies configured."}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {total > 0 && (
+          <Pagination
+            page={page}
+            setPage={setPage}
+            totalPages={totalPages}
+            from={from}
+            to={to}
+            total={total}
+            noun={{ one: "currency", many: "currencies" }}
+          />
+        )}
+      </div>
+
+      {editing && (
+        <CurrencyForm
+          currency={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CurrencyForm({ currency, onClose, onSaved }) {
+  const isNew = !currency.id;
+  const [form, setForm] = useState({
+    name: currency.name || "",
+    code: currency.code || "",
+    symbol: currency.symbol || "",
+    is_active: currency.is_active ?? true,
+  });
+  const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
+
+  const set = (k) => (e) => {
+    const rawValue = e.target.value;
+    const value = k === "code" ? rawValue.toUpperCase() : rawValue;
+    setForm((prev) => ({ ...prev, [k]: value }));
+    setFieldErrors((prev) => ({ ...prev, [k]: undefined }));
+  };
+
+  function validate() {
+    const errors = {};
+    if (!form.name.trim()) errors.name = "Currency name is required.";
+
+    const code = form.code.trim().toUpperCase();
+    if (!code) {
+      errors.code = "Currency code is required.";
+    } else if (!/^[A-Z]{3}$/.test(code)) {
+      errors.code = "Currency code must be exactly 3 alphabetic characters.";
+    }
+
+    if (form.symbol && form.symbol.trim().length > 5) {
+      errors.symbol = "Currency symbol cannot exceed 5 characters.";
+    }
+
+    return errors;
+  }
+
+  async function save() {
+    setError(null);
+    const errors = validate();
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    const payload = {
+      name: form.name.trim(),
+      code: form.code.trim().toUpperCase(),
+      symbol: (form.symbol || "").trim(),
+      is_active: Boolean(form.is_active),
+    };
+
+    try {
+      await mastersApi.saveCurrency(payload, currency.id);
+      onSaved();
+      Swal.fire({
+        icon: "success",
+        title: isNew ? "Currency added" : "Currency updated",
+        text: isNew ? "Currency added successfully" : "Currency updated successfully",
+        timer: 1500,
+        showConfirmButton: false,
+      });
+    } catch (err) {
+      setError(err);
+      const msg =
+        extractErrorMessage(err.response?.data) ||
+        extractErrorMessage(err) ||
+        err.message ||
+        "Save failed";
+      Swal.fire({
+        icon: "error",
+        title: isNew ? "Failed to add currency" : "Failed to update currency",
+        text: msg,
+      });
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <Card title={isNew ? "Add Currency" : "Edit Currency"}>
+          <div className="form-grid">
+            <Field label="Name" required error={fieldErrors.name}>
+              <input value={form.name} onChange={set("name")} placeholder="Currency Name" />
+            </Field>
+            <Field label="Code" required error={fieldErrors.code}>
+              <input
+                value={form.code}
+                onChange={set("code")}
+                maxLength={3}
+                placeholder="INR"
+              />
+            </Field>
+            <Field label="Symbol" error={fieldErrors.symbol}>
+              <input
+                value={form.symbol}
+                onChange={set("symbol")}
+                maxLength={5}
+                placeholder="Rs"
+              />
+            </Field>
+            <Field label="Status">
+              <select
+                value={form.is_active ? "true" : "false"}
+                onChange={(e) => {
+                  setForm((prev) => ({ ...prev, is_active: e.target.value === "true" }));
+                }}
+              >
+                <option value="true">Active</option>
+                <option value="false">Inactive</option>
+              </select>
+            </Field>
+          </div>
+
+          <ErrorText error={error} />
+
+          <div className="btn-row">
+            <button className="btn btn-primary" onClick={save}>
+              Save
+            </button>
+            <button className="btn btn-light" onClick={onClose}>
+              Cancel
+            </button>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
