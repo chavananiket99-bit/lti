@@ -1,12 +1,124 @@
-import { useEffect, useState } from "react";
-import { mastersApi, questionsApi, usersApi } from "../services/endpoints";
+import { useEffect, useRef, useState } from "react";
+import { mastersApi, questionsApi, usersApi, workflowApi } from "../services/endpoints";
 import Swal from "sweetalert2";
 import { Card, ErrorText, Field, SearchBar, Pagination, usePagination, extractErrorMessage } from "../components/ui.jsx";
+
+const CORPORATE_FINANCE_ROLE_CODE = "CORPORATE_FINANCE";
+const CORPORATE_FINANCE_STAGE_CODES = ["CORP_FINANCE_REVIEW", "CORP_FINANCE_CONSOLIDATION"];
+const FALLBACK_STAGE_OPTIONS = [
+  { code: "CORP_FINANCE_REVIEW", label: "Corporate Finance Review" },
+  { code: "CORP_FINANCE_CONSOLIDATION", label: "Corporate Finance Consolidation" },
+];
+
+const stageLabel = (code, stages = []) =>
+  (stages.find((s) => s.code === code)?.label || code || "-");
+
+function MultiSelectDropdown({
+  label,
+  options = [],
+  value = [],
+  onChange,
+  placeholder = "Select options",
+  error,
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef(null);
+  const selectedValues = Array.isArray(value)
+  ? value.map(String)
+  : [];
+  const selectedLabels = options
+  .filter((option) => selectedValues.includes(String(option.id)))
+  .map((option) => option.name);
+  
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target)
+      ) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+  
+  function toggleOption(optionId) {
+    const id = String(optionId);
+    const exists = selectedValues.includes(id);
+    const updated = exists
+    ? selectedValues.filter((item) => item !== id)
+    : [...selectedValues, id];
+    onChange(updated);
+  }
+  
+  return (
+    <div className="field">
+      <span className="field-label">
+        {label} <span className="required">*</span>
+      </span>
+      <div className="multi-select-dropdown" ref={dropdownRef}>
+        <button
+          type="button"
+          className={`multi-select-trigger ${isOpen ? "is-open" : ""}`}
+          onClick={() => setIsOpen((prev) => !prev)}
+          aria-expanded={isOpen}
+        >
+          <span
+            className={
+              selectedLabels.length
+              ? "multi-select-value"
+              : "multi-select-placeholder"
+            }
+          >
+            {selectedLabels.length
+            ? selectedLabels.join(", ")
+            : placeholder}
+          </span>
+          <span className={`multi-select-arrow ${isOpen ? "is-open" : ""}`}>
+            ▾
+          </span>
+        </button>
+        {isOpen && (
+          <div className="multi-select-menu">
+            {options.length > 0 ? (
+              options.map((option) => {
+                const checked = selectedValues.includes(String(option.id));
+                return (
+                  <label
+                    key={option.id}
+                    className="multi-select-option"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleOption(option.id)}
+                    />
+                    <span>{option.name}</span>
+                  </label>
+                );
+              })
+            ) : (
+            <div className="multi-select-empty">
+              No options available
+            </div>
+            )}
+          </div>
+        )}
+      </div>
+      {error && <div className="field-error">{error}</div>}
+    </div>
+  );
+}
 
 export default function Questions() {
   const [questions, setQuestions] = useState([]);
   const [invTypes, setInvTypes] = useState([]);
   const [roles, setRoles] = useState([]);
+  const [stages, setStages] = useState([]);
+  const [workflowByState, setWorkflowByState] = useState({});
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState("");
@@ -14,26 +126,58 @@ export default function Questions() {
     { id: "TEXT", name: "Text" },
     { id: "BOOLEAN", name: "Yes / No" },
     { id: "NUMBER", name: "Number" },
-    { id: "CHOICE", name: "Single Choice" },
   ];
-
 
   function load() {
     questionsApi.list({ page_size: 1000 }).then((r) => setQuestions(r.data.results || r.data)).catch(setError);
-    mastersApi.investmentTypes().then((r) => setInvTypes(r.data.results || r.data)).catch(setError);
-    usersApi.roles().then((r) => setRoles(r.data.results || r.data)).catch(setError);
+    mastersApi.investmentTypes({ is_active: true }).then((r) => setInvTypes(r.data.results || r.data)).catch(setError);
+    usersApi.roles({ is_active: true, exclude_codes: "SYSTEM_ADMIN,SUPER_ADMIN", }).then((r) => setRoles(r.data.results || r.data)).catch(setError);
+    workflowApi.definition().then((r) => {
+      const apiStages = Array.isArray(r.data?.states) ? r.data.states : [];
+      setStages(apiStages.length > 0 ? apiStages : FALLBACK_STAGE_OPTIONS);
+      setWorkflowByState(r.data?.workflow || {});
+    }).catch(() => {
+      setStages(FALLBACK_STAGE_OPTIONS);
+      setWorkflowByState({});
+    });
   }
 
   useEffect(() => {
     load();
   }, []);
+  
+  async function handleToggleActive(q) {
+    const targetActive = !q.is_active;
+    const result = await Swal.fire({
+      title: targetActive ? "Activate question?" : "Disable question?",
+      text: targetActive
+        ? "This will activate the question."
+        : "This will disable the question. It won't be used in user flows.",
+      icon: targetActive ? "question" : "warning",
+      showCancelButton: true,
+      confirmButtonText: targetActive ? "Yes, activate it" : "Yes, disable it",
+    });
+    if (!result.isConfirmed) return;
+    try {
+      if (targetActive) await questionsApi.activate(q.id);
+      else await questionsApi.deactivate(q.id);
+      Swal.fire({ icon: "success", title: targetActive ? "Question activated" : "Question disabled", timer: 1400, showConfirmButton: false });
+      load();
+    } catch (err) {
+      const msg = extractErrorMessage(err) || err.message || "Failed to update question status";
+      Swal.fire({ icon: "error", title: "Failed", text: msg });
+    }
+  }
+  
   const filtered = questions.filter((q) => {
     const value = search.toLowerCase().trim();
     if (!value) return true;
     return (
       (q.text || "").toLowerCase().includes(value) ||
+      (q.parent_question_text || "").toLowerCase().includes(value) ||
       (q.role_name || "").toLowerCase().includes(value) ||
-      (q.investment_type_name || "").toLowerCase().includes(value)
+      (q.investment_type_name || "").toLowerCase().includes(value) ||
+      stageLabel(q.state, stages).toLowerCase().includes(value)
     );
   });
 
@@ -56,20 +200,18 @@ export default function Questions() {
 
       <div className="master-table-card">
         <div className="master-table-header">
-            <SearchBar
+          <SearchBar
           value={search}
           onChange={(v) => {
             setSearch(v);
             setPage(1);
           }}
           placeholder="Search question, role or investment type..."
-        />
+          />
           <div className="master-count">
             <strong>{total}</strong> {total === 1 ? "question" : "questions"}
           </div>
         </div>
-
-        
 
         <div className="master-table-wrapper">
           <table className="table master-table">
@@ -77,9 +219,11 @@ export default function Questions() {
               <tr>
                 <th>Question</th>
                 <th>Role</th>
+                <th>Stage</th>
                 <th>Investment Type</th>
+                <th>Answer Type</th>
                 <th>Active</th>
-                <th></th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
@@ -87,15 +231,26 @@ export default function Questions() {
                 <tr key={q.id}>
                   <td>{q.text}</td>
                   <td>{q.role_name}</td>
+                  <td>{stageLabel(q.state, stages)}</td>
                   <td>{q.investment_type_name}</td>
+                  <td>{q.answer_type}</td>
                   <td>{q.is_active ? "Yes" : "No"}</td>
-                  <td><button className="btn btn-light btn-sm" onClick={() => setEditing(q)}>Edit</button></td>
+                  <td>
+                    <button className="btn btn-light btn-sm" onClick={() => setEditing(q)}>Edit</button>
+                    <button
+                      className={q.is_active ? "btn btn-danger btn-sm" : "btn btn-success btn-sm"}
+                      onClick={() => handleToggleActive(q)}
+                      style={{ marginLeft: "8px" }}
+                    >
+                      {q.is_active ? "Inactive" : "Active"}
+                    </button>
+                  </td>
                 </tr>
               ))}
 
               {total === 0 && (
                 <tr>
-                  <td colSpan={5} className="master-empty">
+                  <td colSpan={6} className="master-empty">
                     <div className="master-empty-title">No questions found</div>
                     <div className="master-empty-description">
                       {search ? "Try changing your search criteria." : "There are currently no questions configured."}
@@ -116,7 +271,6 @@ export default function Questions() {
             to={to}
             total={total}
             noun={{ one: "question", many: "questions" }}
-            onRefresh={load}
           />
         )}
       </div>
@@ -127,6 +281,8 @@ export default function Questions() {
           questionText={editing.text || ""}
           role={editing.role || ""}
           roles={roles}
+          stages={stages}
+          workflowByState={workflowByState}
           invType={invTypes}
           answerTypes={answerTypes}
           questions={questions}
@@ -141,14 +297,53 @@ export default function Questions() {
   );
 }
 
-function QuestionForm({ question, questionText, role, roles = [], invType = [], answerTypes = [], questions, onClose, onSaved }) {
+function QuestionForm({ question, questionText, role, roles = [], stages = [], workflowByState = {}, invType = [], answerTypes = [], questions, onClose, onSaved }) {
   const isNew = !question.id;
+
+  const getSelectedRoleCodes = (roleIds = []) => {
+    const selectedRoleIds = (roleIds || []).map(String);
+    return roles
+      .filter((r) => selectedRoleIds.includes(String(r.id)))
+      .map((r) => r.code);
+  };
+
+  const getDefaultStageFromRoleCodes = (selectedRoleCodes = []) => {
+    if (!selectedRoleCodes.length) return "";
+    if (!workflowByState || Object.keys(workflowByState).length === 0) return "";
+    const selectedRoleCode = selectedRoleCodes[0];
+
+    const matchedStates = Object.entries(workflowByState)
+      .filter(([, cfg]) => Array.isArray(cfg?.owners) && cfg.owners.includes(selectedRoleCode))
+      .map(([stateCode]) => stateCode);
+
+    return matchedStates.length === 1 ? matchedStates[0] : "";
+  };
+
+  const stageOptionsForRoles = (roleIds = []) => {
+    const selectedRoleCodes = getSelectedRoleCodes(roleIds);
+    const corporateFinanceSelected = selectedRoleCodes.includes(CORPORATE_FINANCE_ROLE_CODE);
+
+    if (!corporateFinanceSelected) {
+      return [];
+    }
+    return stages.filter((s) => CORPORATE_FINANCE_STAGE_CODES.includes(s.code));
+  };
+
   const [form, setForm] = useState({
-    text: question.text || "",
-    role: question.roles || [],
-    invType: question.investment_type || [],
-    answerType: question.answer_type || "",
-  });
+ text: question.text || "",
+ role: (question.roles || []).map((r) =>
+   String(typeof r === "object" ? r.id : r)
+ ),
+ stage: question.state || "",
+ invType: (question.investment_type || []).map((i) =>
+   String(typeof i === "object" ? i.id : i)
+ ),
+ answerType: question.answer_type || "",
+ addSubQuestion: false,
+ subQuestionText: "",
+ subQuestionAnswerType: "",
+});
+
   const [error, setError] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
   const set = (k) => (e) => {
@@ -157,6 +352,28 @@ function QuestionForm({ question, questionText, role, roles = [], invType = [], 
     setFieldErrors((prev) => ({ ...prev, [k]: undefined }));
   };
 
+  const setSubQuestionToggle = (e) => {
+    const enabled = e.target.value === "YES";
+    setForm((prev) => ({
+      ...prev,
+      addSubQuestion: enabled,
+      ...(enabled ? {} : { subQuestionText: "", subQuestionAnswerType: "" }),
+    }));
+    setFieldErrors((prev) => ({
+      ...prev,
+      subQuestionText: undefined,
+      subQuestionAnswerType: undefined,
+    }));
+  };
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
   const setMulti = (k) => (e) => {
     // collect selected options' values as array
     const opts = Array.from(e.target.selectedOptions || []).map((o) => o.value);
@@ -164,14 +381,69 @@ function QuestionForm({ question, questionText, role, roles = [], invType = [], 
     setFieldErrors((prev) => ({ ...prev, [k]: undefined }));
   };
 
+  const handleMultiSelect = (key) => (selectedValues) => {
+   setForm((prev) => {
+     if (key !== "role") {
+       return {
+         ...prev,
+         [key]: selectedValues,
+       };
+     }
+
+     const nextStageOptions = stageOptionsForRoles(selectedValues);
+     const selectedRoleCodes = getSelectedRoleCodes(selectedValues);
+     const corporateFinanceSelected = selectedRoleCodes.includes(CORPORATE_FINANCE_ROLE_CODE);
+     const allowedStageCodes = nextStageOptions.map((s) => s.code);
+
+     let nextStage = prev.stage;
+     if (corporateFinanceSelected) {
+       nextStage = allowedStageCodes.includes(prev.stage) ? prev.stage : "";
+     } else {
+       nextStage = getDefaultStageFromRoleCodes(selectedRoleCodes);
+     }
+
+     return {
+       ...prev,
+       role: selectedValues,
+       stage: nextStage,
+     };
+   });
+ setFieldErrors((prev) => ({
+   ...prev,
+   [key]: undefined,
+     stage: key === "role" ? undefined : prev.stage,
+ }));
+};
+
+    const stageOptions = stageOptionsForRoles(form.role);
+    const selectedRoleCodes = getSelectedRoleCodes(form.role);
+    const corporateFinanceSelected = selectedRoleCodes.includes(CORPORATE_FINANCE_ROLE_CODE);
+
   function validate() {
     const errors = {};
     if (!form.text.trim()) errors.text = "Question text is required.";
     else if (form.text.trim().length < 5)
-      errors.text = "Question must be at least 5 characters.";
+    errors.text = "Question must be at least 5 characters.";
     if (!form.role || (Array.isArray(form.role) && form.role.length === 0)) errors.role = "Please select at least one role.";
+    if (corporateFinanceSelected && !form.stage) errors.stage = "Please select a stage.";
+    else if (corporateFinanceSelected && !CORPORATE_FINANCE_STAGE_CODES.includes(form.stage)) {
+      errors.stage = "For Corporate Finance Team, stage must be Corporate Finance Review or Corporate Finance Consolidation.";
+    }
     if (!form.invType || (Array.isArray(form.invType) && form.invType.length === 0)) errors.invType = "Please select at least one investment type.";
     if (!form.answerType) errors.answerType = "Please select an answer type.";
+    if (form.addSubQuestion) {
+      if (form.answerType !== "BOOLEAN") {
+        errors.answerType = "Main question answer type must be Yes / No when adding a sub question.";
+      }
+      if (!form.subQuestionText.trim()) {
+        errors.subQuestionText = "Sub question text is required.";
+      } else if (form.subQuestionText.trim().length < 5) {
+        errors.subQuestionText = "Sub question must be at least 5 characters.";
+      }
+      if (!form.subQuestionAnswerType) {
+        errors.subQuestionAnswerType = "Please select a sub question answer type.";
+      }
+    }
     return errors;
   }
 
@@ -182,16 +454,53 @@ function QuestionForm({ question, questionText, role, roles = [], invType = [], 
     if (Object.keys(errors).length > 0) return;
     try {
       const payload = { text: form.text.trim() };
+      const resolvedState = corporateFinanceSelected
+        ? form.stage
+        : (getDefaultStageFromRoleCodes(selectedRoleCodes) || form.stage || "DRAFT");
+      payload.state = resolvedState;
       if (form.role) payload.roles = form.role;
       if (form.invType) payload.investment_type = form.invType;
       if (form.answerType) payload.answer_type = form.answerType;
-      if (isNew) await questionsApi.create(payload);
-      else await questionsApi.update(question.id, payload);
+
+      const createSubQuestion = async (parentQuestionId) => {
+        const subPayload = {
+          text: form.subQuestionText.trim(),
+          state: resolvedState,
+          roles: form.role,
+          investment_type: form.invType,
+          answer_type: form.subQuestionAnswerType,
+          parent_question: parentQuestionId,
+        };
+        await questionsApi.create(subPayload);
+      };
+
+      let createdMainId = null;
+      if (isNew) {
+        const created = await questionsApi.create(payload);
+        createdMainId = created?.data?.id;
+
+        if (form.addSubQuestion) {
+          if (!createdMainId) {
+            throw new Error("Main question saved but sub question link could not be created. Please try again.");
+          }
+          await createSubQuestion(createdMainId);
+        }
+      } else {
+        await questionsApi.update(question.id, payload);
+        if (form.addSubQuestion) {
+          await createSubQuestion(question.id);
+        }
+      }
+
       onSaved();
       Swal.fire({
         icon: "success",
         title: isNew ? "Question added" : "Question updated",
-        text: isNew ? "Question added successfully" : "Question updated successfully",
+        text: form.addSubQuestion
+          ? (isNew
+            ? "Question and sub question added successfully"
+            : "Question updated and sub question added successfully")
+          : (isNew ? "Question added successfully" : "Question updated successfully"),
         timer: 1500,
         showConfirmButton: false,
       });
@@ -208,24 +517,39 @@ function QuestionForm({ question, questionText, role, roles = [], invType = [], 
         <Card title={isNew ? "Add Question" : "Edit Question"}>
           <div className="form-grid">
             <Field label="Question" required error={fieldErrors.text}><input value={form.text} onChange={set("text")} /></Field>
-            <Field label="Role" required error={fieldErrors.role}>
-              <select multiple value={form.role} onChange={setMulti("role")}>
-                {roles.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Investment Type" required error={fieldErrors.invType}>
-              <select multiple value={form.invType} onChange={setMulti("invType")}>
-                {invType.map((i) => (
-                  <option key={i.id} value={i.id}>
-                    {i.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            <MultiSelectDropdown
+ label="Role"
+ options={roles}
+ value={form.role}
+ onChange={handleMultiSelect("role")}
+ placeholder="Select roles"
+ error={fieldErrors.role}
+/>
+            {corporateFinanceSelected && <Field label="Stage" required error={fieldErrors.stage}><select value={form.stage} onChange={set("stage")}>
+                <option value="">Select stage</option>
+                {stageOptions.map((s, idx) => {
+                  const val = typeof s === "string" ? s : s.code;
+                  const label = typeof s === "string" ? s : s.label;
+                  return (
+                    <option key={val ?? idx} value={val}>
+                      {label}
+                    </option>
+                  );
+                })}
+              </select></Field>}
+            <MultiSelectDropdown
+ label="Investment Type"
+ options={invType}
+ value={form.invType}
+ onChange={handleMultiSelect("invType")}
+ placeholder="Select investment types"
+ error={fieldErrors.invType}
+/>
+            {corporateFinanceSelected && (
+              <div style={{ color: "#64748b", fontSize: "0.8rem" }}>
+                For Corporate Finance Team, only Corporate Finance Review and Corporate Finance Consolidation stages are allowed.
+              </div>
+            )}
             <Field label="Answer Type" required error={fieldErrors.answerType}><select value={form.answerType} onChange={set("answerType")}>
                 <option value="">Select answer type</option>
                 {answerTypes.map((a, idx) => {
@@ -237,8 +561,69 @@ function QuestionForm({ question, questionText, role, roles = [], invType = [], 
                     </option>
                   );
                 })}
-              </select></Field>
-    
+              </select>
+            </Field>
+            {isNew ? (
+              <>
+                <Field label="Add Sub Question?">
+                  <select value={form.addSubQuestion ? "YES" : "NO"} onChange={setSubQuestionToggle}>
+                    <option value="NO">No</option>
+                    <option value="YES">Yes</option>
+                  </select>
+                </Field>
+                {form.addSubQuestion && (
+                  <>
+                    <Field label="Sub Question" required error={fieldErrors.subQuestionText}>
+                      <input value={form.subQuestionText} onChange={set("subQuestionText")} />
+                    </Field>
+                    <Field label="Sub Question Answer Type" required error={fieldErrors.subQuestionAnswerType}>
+                      <select value={form.subQuestionAnswerType} onChange={set("subQuestionAnswerType")}>
+                        <option value="">Select sub question answer type</option>
+                        {answerTypes.map((a, idx) => {
+                          const val = typeof a === "string" ? a : a.id;
+                          const label = typeof a === "string" ? a : a.name;
+                          return (
+                            <option key={val ?? idx} value={val}>
+                              {label}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </Field>
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                <Field label="Add Sub Question?">
+                  <select value={form.addSubQuestion ? "YES" : "NO"} onChange={setSubQuestionToggle}>
+                    <option value="NO">No</option>
+                    <option value="YES">Yes</option>
+                  </select>
+                </Field>
+                {form.addSubQuestion && (
+                  <>
+                    <Field label="Sub Question" required error={fieldErrors.subQuestionText}>
+                      <input value={form.subQuestionText} onChange={set("subQuestionText")} />
+                    </Field>
+                    <Field label="Sub Question Answer Type" required error={fieldErrors.subQuestionAnswerType}>
+                      <select value={form.subQuestionAnswerType} onChange={set("subQuestionAnswerType")}>
+                        <option value="">Select sub question answer type</option>
+                        {answerTypes.map((a, idx) => {
+                          const val = typeof a === "string" ? a : a.id;
+                          const label = typeof a === "string" ? a : a.name;
+                          return (
+                            <option key={val ?? idx} value={val}>
+                              {label}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </Field>
+                  </>
+                )}
+              </>
+            )}
           </div>
           <ErrorText error={error} />
           <div className="btn-row">
