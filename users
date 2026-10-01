@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { usersApi, mastersApi } from "../services/endpoints";
 import Swal from "sweetalert2";
 import { Card, ErrorText, Field, Pagination, usePagination, extractErrorMessage } from "../components/ui.jsx";
+import { Pencil, CircleOff } from "lucide-react";
+import { Tooltip } from "react-tooltip";
+import "react-tooltip/dist/react-tooltip.css";
 
 function EditIcon() {
   return (
@@ -111,15 +114,37 @@ export default function Users() {
     load();
 
     usersApi
-      .roles()
-      .then((r) => setRoles(r.data.results || r.data))
-      .catch(setError);
+    .roles({ is_active: true })
+    .then((r) => setRoles(r.data.results || r.data))
+    .catch(setError);
 
     mastersApi
-      .companies()
-      .then((r) => setCompanies(r.data.results || r.data))
-      .catch(setError);
+    .companies({ is_active: true })
+    .then((r) => setCompanies(r.data.results || r.data))
+    .catch(setError);
   }, []);
+
+  async function handleToggleActive(u) {
+    const targetActive = !u.is_active;
+    const result = await Swal.fire({
+      title: targetActive ? "Activate user?" : "Disable user?",
+      text: targetActive
+        ? "This will activate the user."
+        : "This will disable the user. The user will not be able to login.",
+      icon: targetActive ? "question" : "warning",
+      showCancelButton: true,
+      confirmButtonText: targetActive ? "Yes, activate" : "Yes, disable",
+    });
+    if (!result.isConfirmed) return;
+    try {
+      await usersApi.update(u.id, { is_active: targetActive });
+      Swal.fire({ icon: "success", title: targetActive ? "User activated" : "User disabled", timer: 1400, showConfirmButton: false });
+      load();
+    } catch (err) {
+      const msg = extractErrorMessage(err) || err.message || "Failed to update user status";
+      Swal.fire({ icon: "error", title: "Failed", text: msg });
+    }
+  }
 
   const filteredUsers = users.filter((u) => {
     const value = search.toLowerCase().trim();
@@ -140,13 +165,11 @@ export default function Users() {
   return (
     <div className="users-page">
       {/* =====================================================
-          PAGE HEADER
-          ===================================================== */}
-
+      PAGE HEADER
+      ===================================================== */}
       <div className="users-header">
         <div className="header-content">
           {/* <div className="page-eyebrow">ADMINISTRATION</div> */}
-
           <h1 className="users-title">Users &amp; Roles</h1>
           <p className="limits-subtitle">(Portal users, roles and access status)</p>
 
@@ -168,16 +191,15 @@ export default function Users() {
       <ErrorText error={error} />
 
       {/* =====================================================
-          USER REGISTER
-          ===================================================== */}
-
+      USER REGISTER
+      ===================================================== */}
       <div className="users-table-card">
         <div className="users-table-header">
           <div className="users-toolbar">
-          <div className="users-search-wrapper">
-            <SearchIcon />
+            <div className="users-search-wrapper">
+              <SearchIcon />
 
-            <input
+              <input
               type="text"
               className="users-search"
               placeholder="Search username, name, email or role..."
@@ -186,19 +208,19 @@ export default function Users() {
                 setSearch(e.target.value);
                 setPage(1);
               }}
-            />
+              />
 
-            {search && (
-              <button
+              {search && (
+                <button
                 type="button"
                 className="users-search-clear"
                 onClick={() => setSearch("")}
                 aria-label="Clear search"
-              >
-                ×
-              </button>
-            )}
-          </div>
+                >
+                  ×
+                </button>
+              )}
+            </div>
           </div>
           <div className="users-count">
             <strong>{total}</strong>{" "}
@@ -206,55 +228,40 @@ export default function Users() {
           </div>
         </div>
 
-       
-
-        <div className="users-table-wrapper">
+       <div className="users-table-wrapper">
           <table className="table users-table">
             <thead>
               <tr>
                 <th>Username</th>
-
                 <th>Name</th>
-
                 <th>Email</th>
-
                 <th>Role</th>
-
                 <th>Company</th>
-
                 <th>Access</th>
-
                 <th className="users-action-column">Action</th>
               </tr>
             </thead>
-
             <tbody>
               {pageItems.map((u) => (
                 <tr key={u.id}>
                   <td>
                     <div className="users-username">{u.username}</div>
                   </td>
-
                   <td>
                     <div className="users-name">{u.full_name || "-"}</div>
                   </td>
-
                   <td>
                     <div className="users-email">{u.email || "-"}</div>
                   </td>
-
                   <td>
                     <RoleBadge role={u.role_name} />
                   </td>
-
                   <td>
                     <div className="users-company">{companyText(u)}</div>
                   </td>
-
                   <td>
                     <ActiveBadge active={u.is_active} />
                   </td>
-
                   <td>
                     <button
                       type="button"
@@ -264,6 +271,14 @@ export default function Users() {
                       <EditIcon />
                       Edit
                     </button>
+                    <button
+                      type="button"
+                      className={u.is_active ? "btn btn-danger btn-sm" : "btn btn-success btn-sm"}
+                      onClick={() => handleToggleActive(u)}
+                      style={{ marginLeft: "8px" }}
+                    >
+                      {u.is_active ? "Inactive" : "Active"}
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -272,11 +287,10 @@ export default function Users() {
                 <tr>
                   <td colSpan={7} className="users-empty">
                     <div className="users-empty-title">No users found</div>
-
                     <div className="users-empty-description">
                       {search
-                        ? "Try changing your search criteria."
-                        : "There are currently no users configured."}
+                      ? "Try changing your search criteria."
+                      : "There are currently no users configured."}
                     </div>
                   </td>
                 </tr>
@@ -286,37 +300,34 @@ export default function Users() {
         </div>
 
         {/* =====================================================
-            FOOTER
-            ===================================================== */}
-
+        FOOTER
+        ===================================================== */}
         {filteredUsers.length > 0 && (
           <Pagination
-            page={page}
-            setPage={setPage}
-            totalPages={totalPages}
-            from={from}
-            to={to}
-            total={total}
-            noun={{ one: "user", many: "users" }}
-            onRefresh={load}
+          page={page}
+          setPage={setPage}
+          totalPages={totalPages}
+          from={from}
+          to={to}
+          total={total}q
+          noun={{ one: "user", many: "users" }}
           />
         )}
       </div>
 
       {/* =====================================================
-          ADD / EDIT FORM
-          ===================================================== */}
-
+      ADD / EDIT FORM
+      ===================================================== */}
       {editing && (
         <UserForm
-          user={editing}
-          roles={roles}
-          companies={companies}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null);
-            load();
-          }}
+        user={editing}
+        roles={roles}
+        companies={companies}
+        onClose={() => setEditing(null)}
+        onSaved={() => {
+          setEditing(null);
+          load();
+        }}
         />
       )}
     </div>
@@ -324,9 +335,8 @@ export default function Users() {
 }
 
 /* =========================================================
-   USER FORM
-   ========================================================= */
-
+USER FORM
+========================================================= */
 function UserForm({ user, roles, companies, onClose, onSaved }) {
   const isNew = !user.id;
   const initialCompanyIds = user.company_ids || (user.company ? [user.company] : []);
@@ -347,8 +357,30 @@ function UserForm({ user, roles, companies, onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
 
+  const [companyDropdownOpen, setCompanyDropdownOpen] = useState(false);
+  const companyDropdownRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (companyDropdownRef.current && !companyDropdownRef.current.contains(event.target)) {
+        setCompanyDropdownOpen(false);
+      }
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
   const selectedRole = roles.find((r) => String(r.id) === String(form.role));
   const isGroupEntityUser = selectedRole?.code === "GROUP_ENTITY_USER";
+
+  const selectedCompanyNames = companies.filter((c) => form.companies.map(Number).includes(Number(c.id))).map((c) => c.name).join(", ");
 
   const set = (k) => (e) => {
     const value = e.target.value;
@@ -393,23 +425,25 @@ function UserForm({ user, roles, companies, onClose, onSaved }) {
   };
 
   const toggleCompany = (companyId) => {
-    const id = Number(companyId);
-    setForm((prev) => {
-      const exists = prev.companies.includes(id);
-
-      const updatedCompanies = exists
-        ? prev.companies.filter((company) => company !== id)
-        : [...prev.companies, id];
-
-      return {
-        ...prev,
-        companies: updatedCompanies,
-        company: updatedCompanies[0] || "",
-      };
-    });
-
-    setFieldErrors((prev) => ({ ...prev, companies: undefined, company: undefined }));
-  };
+ const id = Number(companyId);
+ setForm((prev) => {
+   const currentCompanies = (prev.companies || []).map(Number);
+   const exists = currentCompanies.includes(id);
+   const updatedCompanies = exists
+     ? currentCompanies.filter((company) => company !== id)
+     : [...currentCompanies, id];
+   return {
+     ...prev,
+     companies: updatedCompanies,
+     company: updatedCompanies[0] || "",
+   };
+ });
+ setFieldErrors((prev) => ({
+   ...prev,
+   companies: undefined,
+   company: undefined,
+ }));
+};
 
   function validate() {
     const errors = {};
@@ -483,7 +517,7 @@ function UserForm({ user, roles, companies, onClose, onSaved }) {
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal user-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal user-modal user-modal-main" onClick={(e) => e.stopPropagation()}>
         <Card title={isNew ? "Add User" : "Edit User"}>
           <div className="user-form-grid">
             <Field label="Token ID" required error={fieldErrors.username}>
@@ -533,33 +567,86 @@ function UserForm({ user, roles, companies, onClose, onSaved }) {
             </Field>
 
             {isGroupEntityUser ? (
-              <Field label="Companies" required error={fieldErrors.companies}>
-                <div className="company-checkbox-list">
-                  {companies.map((c) => (
-                    <label key={c.id} className="company-checkbox-item">
-                      <input
-                        type="checkbox"
-                        checked={form.companies.includes(Number(c.id))}
-                        onChange={() => toggleCompany(c.id)}
-                      />
-                      <span>{c.name}</span>
-                    </label>
-                  ))}
-                </div>
-              </Field>
-            ) : (
-              <Field label="Company" required error={fieldErrors.company}>
-                <select value={form.company} onChange={set("company")}>
-                  <option value="">Select Company</option>
-
-                  {companies.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            )}
+<Field
+   label="Companies"
+   required
+   error={fieldErrors.companies}
+>
+<div
+     className="company-dropdown"
+     ref={companyDropdownRef}
+>
+     {/* Dropdown input */}
+<button
+       type="button"
+       className={`company-dropdown-trigger ${
+         companyDropdownOpen ? "is-open" : ""
+       }`}
+       onClick={() =>
+         setCompanyDropdownOpen((prev) => !prev)
+       }
+       aria-expanded={companyDropdownOpen}
+>
+<span
+         className={
+           selectedCompanyNames
+             ? "company-dropdown-value"
+             : "company-dropdown-placeholder"
+         }
+>
+         {selectedCompanyNames || "Select companies"}
+</span>
+<span className="company-dropdown-arrow">
+         {companyDropdownOpen ? "▲" : "▼"}
+</span>
+</button>
+     {/* Dropdown options */}
+     {companyDropdownOpen && (
+<div className="company-dropdown-menu">
+         {companies.length > 0 ? (
+           companies.map((c) => (
+<label
+               key={c.id}
+               className="company-dropdown-option"
+>
+<input
+                 type="checkbox"
+                 checked={form.companies
+                   .map(Number)
+                   .includes(Number(c.id))}
+                 onChange={() => toggleCompany(c.id)}
+               />
+<span>{c.name}</span>
+</label>
+           ))
+         ) : (
+<div className="company-dropdown-empty">
+             No companies available
+</div>
+         )}
+</div>
+     )}
+</div>
+</Field>
+) : (
+<Field
+   label="Company"
+   required
+   error={fieldErrors.company}
+>
+<select
+     value={form.company}
+     onChange={set("company")}
+>
+<option value="">Select Company</option>
+     {companies.map((c) => (
+<option key={c.id} value={c.id}>
+         {c.name}
+</option>
+     ))}
+</select>
+</Field>
+)}
 {/* 
             <Field label={isNew ? "Password" : "New Password (optional)"}>
               <input
