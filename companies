@@ -1,0 +1,235 @@
+import { useEffect, useState } from "react";
+import { mastersApi, companiesApi } from "../services/endpoints";
+import Swal from "sweetalert2";
+import { Card, ErrorText, Field, SearchBar, Pagination, usePagination, extractErrorMessage } from "../components/ui.jsx";
+
+export default function Companies() {
+  const [companies, setCompanies] = useState([]);
+  const [companyName, setCompanyName] = useState("");
+  const [code, setCode] = useState("");
+  // const [registrationNo, setRegistrationNo] = useState("");
+  const [error, setError] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [search, setSearch] = useState("");
+
+  function load() {
+    mastersApi.companies().then((r) => setCompanies(r.data.results || r.data)).catch(setError);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function handleToggleActive(c) {
+    const targetActive = !c.is_active;
+    const result = await Swal.fire({
+      title: targetActive ? "Activate company?" : "Disable company?",
+      text: targetActive
+        ? "This will activate the company."
+        : "This will disable the company. It won't be available in user flows.",
+      icon: targetActive ? "question" : "warning",
+      showCancelButton: true,
+      confirmButtonText: targetActive ? "Yes, activate it" : "Yes, disable it",
+    });
+    if (!result.isConfirmed) return;
+    try {
+      if (targetActive) await mastersApi.activate("companies", c.id);
+      else await mastersApi.deactivate("companies", c.id);
+      Swal.fire({ icon: "success", title: targetActive ? "Company activated" : "Company disabled", timer: 1400, showConfirmButton: false });
+      load();
+    } catch (err) {
+      const msg = extractErrorMessage(err) || err.message || "Failed to update company status";
+      Swal.fire({ icon: "error", title: "Failed", text: msg });
+    }
+  }
+
+  const filtered = companies.filter((c) => {
+    const value = search.toLowerCase().trim();
+    if (!value) return true;
+    return (
+      (c.name || "").toLowerCase().includes(value) ||
+      (c.code || "").toLowerCase().includes(value) ||
+      (c.registration_no || "").toLowerCase().includes(value)
+    );
+  });
+
+  const { page, setPage, total, totalPages, pageItems, from, to } = usePagination(filtered, 10);
+
+  return (
+    <div>
+      <div className="page-head">
+        <div className="header-content">
+          {/* <div className="page-eyebrow">ADMINISTRATION</div> */}
+
+          <h1 className="users-title">Companies</h1>
+          <p className="limits-subtitle">(Registered companies and their details)</p>
+
+          {/* <p className="users-subtitle">
+            Manage portal users, roles and company access.
+          </p> */}
+        </div>
+        
+        <button className="btn btn-primary limits-add-btn" onClick={() => setEditing({})}>+ Add Company</button>
+      </div>
+      <ErrorText error={error} />
+
+      <div className="master-table-card">
+        <div className="master-table-header">
+          <SearchBar
+          value={search}
+          onChange={(v) => {
+            setSearch(v);
+            setPage(1);
+          }}
+          placeholder="Search name, code or registration number..."
+        />
+          <div className="master-count">
+            <strong>{total}</strong> {total === 1 ? "company" : "companies"}
+          </div>
+        </div>
+
+        
+
+        <div className="master-table-wrapper">
+          <table className="table master-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Code</th>
+                {/* <th>Registration Number</th> */}
+                <th>Active</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pageItems.map((c) => (
+                <tr key={c.id}>
+                  <td>{c.name}</td>
+                  <td>{c.code}</td>
+                  {/* <td>{c.registration_no}</td> */}
+                  <td>{c.is_active ? "Yes" : "No"}</td>
+                  <td>
+                    <button className="btn btn-light btn-sm" onClick={() => setEditing(c)}>Edit</button>
+                    <button className={c.is_active ? "btn btn-danger btn-sm" : "btn btn-success btn-sm"} onClick={() => handleToggleActive(c)} style={{ marginLeft: "8px" }}>
+                      {c.is_active ? "Inactive" : "Active"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+
+              {total === 0 && (
+                <tr>
+                  <td colSpan={5} className="master-empty">
+                    <div className="master-empty-title">No companies found</div>
+                    <div className="master-empty-description">
+                      {search ? "Try changing your search criteria." : "There are currently no companies configured."}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {total > 0 && (
+          <Pagination
+            page={page}
+            setPage={setPage}
+            totalPages={totalPages}
+            from={from}
+            to={to}
+            total={total}
+            noun={{ one: "company", many: "companies" }}
+          />
+        )}
+      </div>
+
+      {editing && (
+        <CompanyForm
+          company={editing}
+          companyName={companyName}
+          code={code}
+          // registrationNo={registrationNo}
+          companies={companies}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CompanyForm({ company, companyName, code, companies, onClose, onSaved }) {
+  const isNew = !company.id;
+  const [form, setForm] = useState({
+    name: company.name || "",
+    code: company.code || "",
+    // registration_no: company.registration_no || "",
+  });
+  const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const set = (k) => (e) => {
+    setForm({ ...form, [k]: e.target.value });
+    setFieldErrors((prev) => ({ ...prev, [k]: undefined }));
+  };
+
+  function validate() {
+    const errors = {};
+    if (isNew && !form.name.trim()) errors.name = "Company name is required.";
+    if (!form.code.trim()) errors.code = "Company code is required.";
+    else if (form.code.trim().length > 20)
+      errors.code = "Company code cannot exceed 20 characters.";
+    else if (!/^[A-Za-z0-9_-]+$/.test(form.code.trim()))
+      errors.code = "Use only letters, numbers, hyphen or underscore.";
+    return errors;
+  }
+
+  async function save() {
+    setError(null);
+    const errors = validate();
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+    try {
+      const payload = { ...form, name: form.name.trim(), code: form.code.trim() };
+      if (!payload.name) delete payload.name;
+      // if (!isNew && !payload.password) delete payload.password;
+      if (isNew) await companiesApi.create(payload);
+      else await companiesApi.update(company.id, payload);
+      onSaved();
+      Swal.fire({
+        icon: "success",
+        title: isNew ? "Company added" : "Company updated",
+        text: isNew ? "Company added successfully" : "Company updated successfully",
+        timer: 1500,
+        showConfirmButton: false,
+      });
+    } catch (err) {
+      setError(err);
+      const msg = extractErrorMessage(err) || extractErrorMessage(err.response?.data) || err.message || "Save failed";
+      Swal.fire({ icon: "error", title: isNew ? "Failed to add company" : "Failed to update company", text: msg });
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <Card title={isNew ? "Add Company" : "Edit Company"}>
+          <div className="form-grid">
+            <Field label="Company Name" required error={fieldErrors.name}><input value={form.name} onChange={set("name")} disabled={!isNew} placeholder="Company Name" /></Field>
+            <Field label="Company Code" required error={fieldErrors.code}><input value={form.code} onChange={set("code")} placeholder="Company Code" /></Field>
+            {/* <Field label="Registration Number"><input value={form.registration_no} onChange={set("registration_no")} /></Field>
+     */}
+          </div>
+          <ErrorText error={error} />
+          <div className="btn-row">
+            <button className="btn btn-primary" onClick={save}>Save</button>
+            <button className="btn btn-light" onClick={onClose}>Cancel</button>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
