@@ -1,107 +1,498 @@
-import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import React, { useCallback, useEffect, useState, useRef } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   complianceApi,
   proposalsApi,
   questionnaireApi,
   usersApi,
   workflowApi,
+  mastersApi,
 } from "../services/endpoints";
 import { useAuth } from "../hooks/useAuth.jsx";
-import { Card, StateBadge, ErrorText, Field } from "../components/ui.jsx";
+import Swal from "sweetalert2";
+import { StateBadge, ErrorText, Field } from "../components/ui.jsx";
+import { RequestViewContent } from "../components/RequestViewModal.jsx";
 
 const money = (n) => Number(n || 0).toLocaleString("en-IN");
 
-export default function ProposalDetail() {
-  const { id } = useParams();
-  const { isAdmin, hasRole } = useAuth();
-  const [proposal, setProposal] = useState(null);
-  const [actions, setActions] = useState([]);
-  const [history, setHistory] = useState([]);
-  const [error, setError] = useState(null);
+const formatRate = (value, fallback = "-") => {
+  if (value === null || value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  if (Number.isNaN(parsed)) return fallback;
+  return parsed.toFixed(2);
+};
+const formatDate = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+};
 
-  const load = useCallback(() => {
-    setError(null);
-    proposalsApi.get(id).then((r) => setProposal(r.data)).catch(setError);
-    proposalsApi.availableActions(id).then((r) => setActions(r.data.actions)).catch(() => {});
-    workflowApi.approvals(id).then((r) => setHistory(r.data.results || r.data)).catch(() => {});
-  }, [id]);
+const formatState = (state = "") =>
+  state
+    .replaceAll("_", " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 
-  useEffect(() => load(), [load]);
-
-  if (error) return <ErrorText error={error} />;
-  if (!proposal) return <div>Loading proposal...</div>;
-
+function AccordionSection({
+  id,
+  title,
+  subtitle,
+  icon,
+  badge,
+  isOpen,
+  onToggle,
+  children,
+}) {
   return (
-    <div>
-      <div className="page-head">
-        <h2>{proposal.reference_no}</h2>
-        <StateBadge state={proposal.current_state} label={proposal.state_display} />
-      </div>
+    <div className={`p-accordion-card ${isOpen ? "open" : "collapsed"}`}>
+      <button
+        type="button"
+        className="p-accordion-header"
+        onClick={() => onToggle(id)}
+        aria-expanded={isOpen}
+      >
+        <div className="p-accordion-title-group">
+          {icon && <span className="p-accordion-icon">{icon}</span>}
+          <div className="p-accordion-text-stack">
+            <span className="p-accordion-title">{title}</span>
+            {subtitle && <span className="p-accordion-subtitle">{subtitle}</span>}
+          </div>
+          {badge && <span className="p-accordion-badge">{badge}</span>}
+        </div>
 
-      <div className="grid-2">
-        <Card title="Proposal Details">
-          <dl className="detail-list">
-            <div><dt>Company</dt><dd>{proposal.company_name}</dd></div>
-            <div><dt>Type</dt><dd>{proposal.investment_type_name}</dd></div>
-            <div><dt>Counterparty</dt><dd>{proposal.counterparty}</dd></div>
-            <div><dt>Amount</dt><dd>{proposal.currency_code} {money(proposal.amount)}</dd></div>
-            <div><dt>Limit Type</dt><dd>{proposal.limit_type_display}</dd></div>
-            <div><dt>Financial Year</dt><dd>{proposal.financial_year_code}</dd></div>
-            <div><dt>Tenure</dt><dd>{proposal.tenure_months || "-"} months</dd></div>
-            <div><dt>Interest</dt><dd>{proposal.interest_rate || "-"}%</dd></div>
-            <div><dt>Material</dt><dd>{proposal.is_material ? "Yes" : "No"}</dd></div>
-            <div><dt>Total Disbursed</dt><dd>{money(proposal.total_disbursed)}</dd></div>
-          </dl>
-          <p className="muted">{proposal.purpose}</p>
-        </Card>
+        <div className="p-accordion-right">
+          <span className={`p-chevron ${isOpen ? "rotate" : ""}`}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </span>
+        </div>
+      </button>
 
-        <WorkflowPanel
-          proposal={proposal}
-          actions={actions}
-          onDone={load}
-        />
-      </div>
-
-      <Questionnaire proposalId={id} state={proposal.current_state} onSaved={load} />
-
-      <ComplianceChecklist proposalId={id} />
-
-      <Documents proposal={proposal} onUploaded={load} />
-
-      {(hasRole("CASH_MANAGEMENT", "HO_ACCOUNTS") || isAdmin()) && (
-        <DisbursementPanel proposal={proposal} onDone={load} />
+      {isOpen && (
+        <div className="p-accordion-content">
+          {children}
+        </div>
       )}
-
-      <Card title="Approval History">
-        <table className="table">
-          <thead>
-            <tr><th>When</th><th>Actor</th><th>Action</th><th>From → To</th><th>Remarks</th></tr>
-          </thead>
-          <tbody>
-            {history.map((h) => (
-              <tr key={h.id}>
-                <td>{new Date(h.created_at).toLocaleString()}</td>
-                <td>{h.actor_name} <span className="muted">({h.actor_role})</span></td>
-                <td>{h.action_display}</td>
-                <td>{h.from_state} → {h.to_state}</td>
-                <td>{h.remarks}</td>
-              </tr>
-            ))}
-            {history.length === 0 && (
-              <tr><td colSpan={5} className="muted center">No actions yet.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </Card>
     </div>
   );
 }
 
-function WorkflowPanel({ proposal, actions, onDone }) {
+function DisbursementList({ proposal }) {
+  const rows = proposal.disbursements || [];
+
+  if (rows.length === 0) {
+    return (
+      <div style={{ padding: "0.6rem", textAlign: "center", color: "#94a3b8", fontSize: "0.8rem" }}>
+        No disbursements recorded yet.
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="table-wrapper">
+        <table className="table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
+          <thead>
+            <tr style={{ background: "#f8fafc", textAlign: "left" }}>
+              <th style={{ padding: "6px 10px" }}>Amount</th>
+              <th style={{ padding: "6px 10px" }}>Currency</th>
+              <th style={{ padding: "6px 10px" }}>Exchange Rate</th>
+              <th style={{ padding: "6px 10px" }}>Disbursement Date</th>
+              <th style={{ padding: "6px 10px" }}>Payment Reference</th>
+              <th style={{ padding: "6px 10px" }}>Recorded By</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((d) => (
+              <tr key={d.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                <td style={{ padding: "6px 10px", fontWeight: 600 }}>{money(d.amount)}</td>
+                <td style={{ padding: "6px 10px" }}>{d.currency_code}</td>
+                <td style={{ padding: "6px 10px" }}>{formatRate(d.exchange_rate)}</td>
+                <td style={{ padding: "6px 10px" }}>{d.value_date}</td>
+                <td style={{ padding: "6px 10px" }}>{d.payment_reference}</td>
+                <td style={{ padding: "6px 10px", color: "#64748b" }}>{d.created_by_name || d.created_by || "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+export default function ProposalDetail() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { hasRole } = useAuth();
+
+  const [proposal, setProposal] = useState(null);
+  const [actions, setActions] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [error, setError] = useState(null);
+  const [showRequestView, setShowRequestView] = useState(false);
+  const requestViewCheckSeq = useRef(0);
+
+  // Focus on core details and immediate workflow by default to keep viewport concise
+  const [openSections, setOpenSections] = useState({
+    details: true,
+    questionnaire: false,
+    documents: false,
+    disbursement: false,
+    workflow: true,
+    requestView: false,
+  });
+
+  const toggleSection = (sec) => {
+    setOpenSections((prev) => ({ ...prev, [sec]: !prev[sec] }));
+  };
+
+  const expandAll = () => {
+    setOpenSections({
+      details: true,
+      questionnaire: true,
+      documents: true,
+      disbursement: true,
+      workflow: true,
+      requestView: true,
+    });
+  };
+
+  const collapseAll = () => {
+    setOpenSections({
+      details: false,
+      questionnaire: false,
+      documents: false,
+      disbursement: false,
+      workflow: false,
+      requestView: false,
+    });
+  };
+
+  async function downloadDocument(d) {
+    setError(null);
+    try {
+      const res = await proposalsApi.downloadDocument(d.id);
+
+      const contentDisposition = res.headers["content-disposition"];
+      let filename = "download";
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename\*?=([^;]+)/);
+        if (match) filename = match[1].replace(/UTF-8''/, "").replace(/"/g, "").trim();
+      } else {
+        filename = (d.file || "").split("/").pop().split("?")[0] || filename;
+      }
+
+      const blob = new Blob([res.data], {
+        type: res.headers["content-type"] || "application/octet-stream",
+      });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(link.href);
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  const load = useCallback(() => {
+    setError(null);
+    const checkSeq = ++requestViewCheckSeq.current;
+
+    proposalsApi
+      .get(id)
+      .then(async (r) => {
+        const nextProposal = r.data;
+        setProposal(nextProposal);
+
+        if (nextProposal.current_state !== "DRAFT") {
+          if (requestViewCheckSeq.current === checkSeq) {
+            setShowRequestView(true);
+          }
+          return;
+        }
+
+        try {
+          const resAnswers = await questionnaireApi.answersForProposal(nextProposal.id);
+          if (requestViewCheckSeq.current !== checkSeq) return;
+          const rows = resAnswers.data.results || resAnswers.data || [];
+          setShowRequestView(rows.length > 0);
+        } catch {
+          if (requestViewCheckSeq.current !== checkSeq) return;
+          setShowRequestView(false);
+        }
+      })
+      .catch((err) => {
+        if (requestViewCheckSeq.current === checkSeq) {
+          setShowRequestView(false);
+        }
+        setError(err);
+      });
+
+    proposalsApi
+      .availableActions(id)
+      .then((r) => setActions(r.data.actions || []))
+      .catch(() => {});
+
+    workflowApi
+      .approvals(id)
+      .then((r) => setHistory(r.data.results || r.data || []))
+      .catch(() => {});
+  }, [id]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (error) return <ErrorText error={error} />;
+
+  if (!proposal) {
+    return (
+      <div className="detail-loading" style={{ padding: "1.5rem", textAlign: "center" }}>
+        <div className="loading-spinner" />
+        <span style={{ fontSize: "0.85rem", color: "#64748b" }}>Loading proposal details...</span>
+      </div>
+    );
+  }
+
+  const docCount = proposal.documents?.length || 0;
+  const pendingActionsCount = actions?.length || 0;
+  const canEditDraftProposal =
+    hasRole("GROUP_ENTITY_USER") && proposal.current_state === "DRAFT";
+
+  return (
+    <div className="proposal-detail-page compact-layout">
+      {/* COMPACT HEADER BAR */}
+      <div className="proposal-header-card">
+        <div className="proposal-header-left">
+          <Link to="/proposals" className="back-link-btn" title="Back to Proposals">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6" /></svg>
+            Back
+          </Link>
+
+          <h1 className="proposal-hero-ref">{proposal.reference_no}</h1>
+          <span className="proposal-hero-sub">
+            <span>{proposal.investment_type_name}</span>
+            <span>•</span>
+            <span>{proposal.company_name}</span>
+          </span>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <StateBadge
+            state={proposal.current_state}
+            label={proposal.state_display}
+          />
+          {canEditDraftProposal && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() =>
+                navigate(`/proposals/new?edit=${proposal.id}`, {
+                  state: { proposalForEdit: proposal },
+                })
+              }
+              style={{ padding: "0.35rem 0.75rem", fontSize: "0.8rem" }}
+            >
+              Edit Draft
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* QUICK CONTROLS */}
+      <div className="accordion-toolbar">
+        <button type="button" className="btn-toolbar" onClick={expandAll}>
+          Expand All
+        </button>
+        <button type="button" className="btn-toolbar" onClick={collapseAll}>
+          Collapse All
+        </button>
+      </div>
+
+      {/* ACCORDION 1: PROPOSAL DETAILS */}
+      <AccordionSection
+        id="details"
+        title="Proposal Details"
+        isOpen={openSections.details}
+        onToggle={toggleSection}
+      >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+            gap: "0.45rem",
+          }}
+        >
+          <div className="detail-meta-pill">
+            <dt>Company</dt>
+            <dd>{proposal.company_name || "-"}</dd>
+          </div>
+
+          <div className="detail-meta-pill">
+            <dt>Investment Type</dt>
+            <dd>{proposal.investment_type_name || "-"}</dd>
+          </div>
+
+          <div className="detail-meta-pill">
+            <dt>Currency</dt>
+            <dd>{proposal.currency_code || "-"}</dd>
+          </div>
+
+          <div className="detail-meta-pill highlight">
+            <dt>Sanction Amount</dt>
+            <dd>{proposal.currency_code} {money(proposal.amount)}</dd>
+          </div>
+
+          <div className="detail-meta-pill">
+            <dt>Limit Type</dt>
+            <dd>{proposal.limit_type_display || "-"}</dd>
+          </div>
+
+          <div className="detail-meta-pill">
+            <dt>Financial Year</dt>
+            <dd>{proposal.financial_year_code || "-"}</dd>
+          </div>
+
+          <div className="detail-meta-pill">
+            <dt>Tenure</dt>
+            <dd>{proposal.tenure_months ? `${proposal.tenure_months} mo` : "-"}</dd>
+          </div>
+
+          <div className="detail-meta-pill">
+            <dt>Interest Rate</dt>
+            <dd>{proposal.interest_rate === null || proposal.interest_rate === undefined || proposal.interest_rate === "" ? "-" : `${formatRate(proposal.interest_rate)}%`}</dd>
+          </div>
+
+          <div className="detail-meta-pill">
+            <dt>Value Date</dt>
+            <dd>{formatDate(proposal.value_date)}</dd>
+          </div>
+
+          <div className="detail-meta-pill highlight">
+            <dt>Total Disbursed</dt>
+            <dd>{proposal.currency_code} {money(proposal.total_disbursed)}</dd>
+          </div>
+        </div>
+
+        <div className="purpose-container">
+          <div className="purpose-label">Investment Purpose</div>
+          <p>{proposal.purpose || "No specific purpose provided."}</p>
+        </div>
+       
+      </AccordionSection>
+        {/*Request View (moved from modal) */}
+        {showRequestView && (
+          <AccordionSection
+            id="requestView"
+            title="Request View"
+            subtitle="Inputs / Questionnaire"
+            isOpen={openSections.requestView}
+            onToggle={toggleSection}
+          >
+            <RequestViewContent proposal={proposal} enabled={true} />
+          </AccordionSection>
+        )}
+      {/* ACCORDION 2: QUESTIONNAIRE */}
+      <AccordionSection
+        id="questionnaire"
+        title="Questionnaire"
+        subtitle="Questions applicable to your role and the current proposal stage."
+        isOpen={openSections.questionnaire}
+        onToggle={toggleSection}
+      >
+        <Questionnaire
+          proposalId={id}
+          state={proposal.current_state}
+          actions={actions}
+          onSaved={load}
+        />
+      </AccordionSection>
+
+      {/* ACCORDION 3: DOCUMENTS */}
+      <AccordionSection
+        id="documents"
+        title="Documents"
+        badge={`${docCount} ${docCount === 1 ? "File" : "Files"}`}
+        isOpen={openSections.documents}
+        onToggle={toggleSection}
+      >
+        <Documents
+          proposal={proposal}
+          actions={actions}
+          onUploaded={load}
+          onDownload={downloadDocument}
+        />
+      </AccordionSection>
+
+      {/* ACCORDION 4: DISBURSEMENT */}
+      {hasRole("CASH_MANAGEMENT") &&
+        proposal.current_state !== "COMPLETED" &&
+        proposal.current_state !== "COMPLETE" && (
+          <AccordionSection
+            id="disbursement"
+            title="Disbursement Panel"
+            subtitle="Record tranche payments"
+            icon="💳"
+            badge="Cash Management"
+            isOpen={openSections.disbursement}
+            onToggle={toggleSection}
+          >
+            <DisbursementPanel proposal={proposal} onDone={load} />
+          </AccordionSection>
+        )}
+
+      {/* ACCORDION 4b: DISBURSEMENT DETAILS (read-only) for Group Entity users when request is completed */}
+      {hasRole("GROUP_ENTITY_USER") &&
+        (proposal.current_state === "COMPLETED" || proposal.current_state === "COMPLETE") && (
+          <AccordionSection
+            id="disbursement"
+            title="Disbursement Details"
+            subtitle="Payments recorded by Cash Management"
+            isOpen={openSections.disbursement}
+            onToggle={toggleSection}
+          >
+            <DisbursementList proposal={proposal} />
+          </AccordionSection>
+        )}
+
+      {/* ACCORDION 5: WORKFLOW ACTIONS */}
+      <AccordionSection
+        id="workflow"
+        title="Workflow"
+        isOpen={openSections.workflow}
+        onToggle={toggleSection}
+      >
+        <WorkflowPanel
+          proposal={proposal}
+          actions={actions}
+          history={history}
+          onDone={load}
+        />
+      </AccordionSection>
+    </div>
+  );
+}
+
+function WorkflowPanel({ proposal, actions = [], onDone }) {
   const [remarks, setRemarks] = useState("");
-  const [assignee, setAssignee] = useState("");
-  const [execs, setExecs] = useState([]);
+  const [groupCfos, setGroupCfos] = useState([]);
+  const [mdCeoUsers, setMdCeoUsers] = useState([]);
+  const [otherApproverUsers, setOtherApproverUsers] = useState([]);
+  const [selectedGroupCfo, setSelectedGroupCfo] = useState("");
+  const [selectedMdCeo, setSelectedMdCeo] = useState("");
+  const [selectedOtherApprover, setSelectedOtherApprover] = useState("");
+  const [selectionErrors, setSelectionErrors] = useState({
+    groupCfo: "",
+    mdCeo: "",
+  });
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -109,31 +500,90 @@ function WorkflowPanel({ proposal, actions, onDone }) {
 
   useEffect(() => {
     if (needsAssignee) {
-      usersApi.approvers()
-        .then((r) => {
-          const list = r.data.results || r.data;
-          console.log(JSON.stringify(list));
-          setExecs(list);
-        })
-        .catch(() => {});
+      // Load users for each fixed approver role, scoped to the proposal's
+      // company so only approvers assigned to that company are selectable.
+      const company = proposal.company;
+      usersApi
+        .approvers("GROUP_CFO", company)
+        .then((r) => setGroupCfos(r.data.results || r.data || []))
+        .catch(() => setGroupCfos([]));
+
+      usersApi
+        .approvers("GROUP_MD_CEO", company)
+        .then((r) => setMdCeoUsers(r.data.results || r.data || []))
+        .catch(() => setMdCeoUsers([]));
+
+      usersApi
+        .approvers("OTHER_APPROVER", company)
+        .then((r) => setOtherApproverUsers(r.data.results || r.data || []))
+        .catch(() => setOtherApproverUsers([]));
     }
   }, [needsAssignee]);
 
   const actionLabel = {
-    SUBMIT: "Submit",
-    APPROVE: "Approve / Forward",
-    REJECT: "Reject / Send Back",
+    SUBMIT: "Submit Proposal",
+    APPROVE: "Approve",
+    REJECT: "Send Back",
     COMPLETE: "Complete Disbursement",
   };
 
+  const actionSuccessTitle = {
+    SUBMIT: "Proposal submitted successfully",
+    APPROVE: "Proposal moved to next stage successfully",
+    REJECT: "Proposal sent back successfully",
+    COMPLETE: "Proposal completed successfully",
+  };
+
   async function run(action) {
+    // Remarks are mandatory for REJECT, APPROVE and COMPLETE (backend enforced)
+    if ((action === "REJECT" || action === "APPROVE" || action === "COMPLETE") && !remarks.trim()) {
+      setError({ detail: "Remarks are mandatory for this action." });
+      return;
+    }
+
+    if (needsAssignee && action === "APPROVE") {
+      const nextSelectionErrors = {
+        groupCfo: selectedGroupCfo ? "" : "Please select Group CFO.",
+        mdCeo: selectedMdCeo ? "" : "Please select Group MD & CEO.",
+      };
+      const hasSelectionError = Boolean(nextSelectionErrors.groupCfo || nextSelectionErrors.mdCeo);
+      setSelectionErrors(nextSelectionErrors);
+
+      if (hasSelectionError) {
+        setError({
+          detail: [nextSelectionErrors.groupCfo, nextSelectionErrors.mdCeo].filter(Boolean).join(" "),
+        });
+        return;
+      }
+    }
+
     setBusy(true);
     setError(null);
+
     try {
       const payload = { remarks };
-      if (needsAssignee && action === "APPROVE") payload.assignee = assignee;
+
+      if (needsAssignee && action === "APPROVE") {
+        payload.assignee = selectedGroupCfo;
+      }
+
       const endpoint = action.toLowerCase();
       await proposalsApi.act(proposal.id, endpoint, payload);
+
+      await Swal.fire({
+        toast: true,
+        position: "top-end",
+        icon: "success",
+        title: actionSuccessTitle[action] || "Action completed successfully",
+        timer: 1800,
+        timerProgressBar: true,
+        showConfirmButton: false,
+        didOpen: (toast) => {
+          toast.addEventListener("mouseenter", Swal.stopTimer);
+          toast.addEventListener("mouseleave", Swal.resumeTimer);
+        },
+      });
+
       setRemarks("");
       onDone();
     } catch (err) {
@@ -145,74 +595,170 @@ function WorkflowPanel({ proposal, actions, onDone }) {
 
   if (actions.length === 0) {
     return (
-      <Card title="Workflow">
-        <p className="muted">You have no pending actions on this proposal at its current stage.</p>
-      </Card>
+      <div style={{ padding: "0.5rem", textAlign: "center", color: "#64748b", fontSize: "0.82rem" }}>
+        ✓ <strong>No Pending Actions</strong> — You have no approval tasks at the current stage ({proposal.state_display || formatState(proposal.current_state)}).
+      </div>
     );
   }
 
   return (
-    <Card title="Workflow Actions">
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "0.5rem" }}>
+        <span style={{ color: "#64748b", fontSize: "0.72rem", textTransform: "uppercase", fontWeight: 700 }}>Current Stage:</span>
+        <strong style={{ fontSize: "0.88rem", color: "#0f172a" }}>
+          {proposal.state_display || formatState(proposal.current_state)}
+        </strong>
+      </div>
+
       {needsAssignee && (
-        <Field label="Select Authorised Person (Group MD & CEO / Group CFO / Other)">
-          <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
-            <option value="">Select approver</option>
-            {execs.map((u) => (
-              <option key={u.id} value={u.id}>{u.full_name} ({u.role_code})</option>
-            ))}
-          </select>
-        </Field>
+        <div>
+          <div className="compact-field">
+            <label>
+              Group CFO (GROUP_CFO) <span style={{ color: "#e11d48" }}>*</span>
+            </label>
+            <select
+              value={selectedGroupCfo}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedGroupCfo(val);
+                setSelectionErrors((prev) => ({
+                  ...prev,
+                  groupCfo: val ? "" : prev.groupCfo,
+                }));
+              }}
+              className="compact-input"
+            >
+              <option value="">-- Select Group CFO --</option>
+              {groupCfos.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.full_name} ({u.role_code})
+                </option>
+              ))}
+            </select>
+            {selectionErrors.groupCfo && (
+              <div style={{ color: "#dc2626", fontSize: "0.75rem", marginTop: "4px" }}>
+                {selectionErrors.groupCfo}
+              </div>
+            )}
+          </div>
+
+          <div className="compact-field">
+            <label>
+              Group MD & CEO (GROUP_MD_CEO) <span style={{ color: "#e11d48" }}>*</span>
+            </label>
+            <select
+              value={selectedMdCeo}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedMdCeo(val);
+                setSelectionErrors((prev) => ({
+                  ...prev,
+                  mdCeo: val ? "" : prev.mdCeo,
+                }));
+              }}
+              className="compact-input"
+            >
+              <option value="">-- Select MD & CEO --</option>
+              {mdCeoUsers.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.full_name} ({u.role_code})
+                </option>
+              ))}
+            </select>
+            {selectionErrors.mdCeo && (
+              <div style={{ color: "#dc2626", fontSize: "0.75rem", marginTop: "4px" }}>
+                {selectionErrors.mdCeo}
+              </div>
+            )}
+          </div>
+
+        </div>
       )}
-      <Field label="Remarks (mandatory for reject)">
-        <textarea value={remarks} onChange={(e) => setRemarks(e.target.value)} rows={2} />
-      </Field>
+
+      <div className="compact-field">
+        <label>Remarks {actions.includes("REJECT") && <span style={{ color: "#e11d48" }}>*</span>}</label>
+        <textarea
+          value={remarks}
+          onChange={(e) => setRemarks(e.target.value)}
+          rows={2}
+          placeholder="Enter remarks or approval notes..."
+          className="compact-input"
+          style={{ resize: "vertical" }}
+        />
+      </div>
+
       <ErrorText error={error} />
-      <div className="btn-row">
+
+      <div style={{ display: "flex", gap: "8px", marginTop: "0.4rem" }}>
         {actions.map((a) => (
           <button
             key={a}
             className={`btn ${a === "REJECT" ? "btn-danger" : "btn-primary"}`}
-            disabled={busy}
+            disabled={busy || (a === "COMPLETE" && (proposal.disbursements || []).length === 0)}
             onClick={() => run(a)}
+            style={{ padding: "0.35rem 0.85rem", fontSize: "0.82rem" }}
           >
-            {actionLabel[a] || a}
+            {busy ? "Processing..." : actionLabel[a] || a}
           </button>
         ))}
       </div>
-    </Card>
+    </div>
   );
 }
 
-function Questionnaire({ proposalId, state, onSaved }) {
+function Questionnaire({ proposalId, actions = [], state, onSaved }) {
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
   const [error, setError] = useState(null);
   const [msg, setMsg] = useState("");
+  const editable = Array.isArray(actions) && actions.length > 0;
+
+  const isYesAnswer = (value) => String(value || "").trim().toLowerCase() === "yes";
+  const isQuestionVisible = (question, answerMap) => {
+    if (!question.parent_question) return true;
+    return isYesAnswer(answerMap[question.parent_question]);
+  };
+  const visibleQuestions = questions.filter((q) => isQuestionVisible(q, answers));
+
+  const allAnswered =
+    visibleQuestions.length > 0 &&
+    visibleQuestions.every((q) => {
+      if (!q.is_mandatory) return true;
+      const a = answers[q.id];
+      return a !== undefined && a !== null && String(a).trim() !== "";
+    });
 
   const load = useCallback(() => {
     questionnaireApi.forProposal(proposalId).then((r) => {
-      setQuestions(r.data.questions);
+      const qs = r.data.questions || [];
+      setQuestions(qs);
+
       const map = {};
-      r.data.questions.forEach((q) => (map[q.id] = q.answer_text || ""));
+      qs.forEach((q) => (map[q.id] = q.answer_text || ""));
       setAnswers(map);
-    });
+    }).catch(setError);
   }, [proposalId]);
 
-  useEffect(() => load(), [load, state]);
+  useEffect(() => {
+    load();
+  }, [load, state]);
 
-  if (questions.length === 0) return null;
+  if (questions.length === 0) {
+    return <div style={{ color: "#94a3b8", fontSize: "0.8rem" }}>No questionnaire items found for this stage.</div>;
+  }
 
   async function save() {
     setError(null);
     try {
       await questionnaireApi.bulkAnswer({
         proposal: proposalId,
-        answers: Object.entries(answers).map(([question, answer_text]) => ({
-          question: Number(question),
-          answer_text,
+        answers: visibleQuestions.map((q) => ({
+          question: Number(q.id),
+          answer_text: answers[q.id] || "",
         })),
       });
-      setMsg("Questionnaire saved.");
+
+      setMsg("Answers saved.");
       setTimeout(() => setMsg(""), 2500);
       onSaved();
     } catch (err) {
@@ -221,181 +767,366 @@ function Questionnaire({ proposalId, state, onSaved }) {
   }
 
   return (
-    <Card title="Questionnaire (your role, this stage)">
-      {questions.map((q) => (
-        <Field key={q.id} label={`${q.text}${q.is_mandatory ? " *" : ""}`}>
-          {q.answer_type === "BOOLEAN" ? (
-            <select
-              value={answers[q.id] || ""}
-              onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
-            >
-              <option value="">Select</option>
-              <option value="Yes">Yes</option>
-              <option value="No">No</option>
-            </select>
-          ) : q.answer_type === "CHOICE" ? (
-            <select
-              value={answers[q.id] || ""}
-              onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
-            >
-              <option value="">Select</option>
-              {(q.options || []).map((o) => (
-                <option key={o} value={o}>{o}</option>
-              ))}
-            </select>
-          ) : (
-            <input
-              type={q.answer_type === "NUMBER" ? "number" : "text"}
-              value={answers[q.id] || ""}
-              onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
-            />
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))", gap: "0.5rem" }}>
+        {visibleQuestions.map((q) => (
+          <div key={q.id} className="compact-field">
+            <label>{q.text}{q.is_mandatory ? " *" : ""}</label>
+            {q.answer_type === "BOOLEAN" ? (
+              <select
+                value={answers[q.id] || ""}
+                disabled={!editable}
+                onChange={(e) => {
+                  const nextValue = e.target.value;
+                  setAnswers((prev) => {
+                    const next = { ...prev, [q.id]: nextValue };
+                    questions.forEach((item) => {
+                      if (item.parent_question && !isQuestionVisible(item, next)) {
+                        next[item.id] = "";
+                      }
+                    });
+                    return next;
+                  });
+                }}
+                className="compact-input"
+              >
+                <option value="">Select option</option>
+                <option value="Yes">Yes</option>
+                <option value="No">No</option>
+              </select>
+            ) : q.answer_type === "CHOICE" ? (
+              <select
+                value={answers[q.id] || ""}
+                disabled={!editable}
+                onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
+                className="compact-input"
+              >
+                <option value="">Select</option>
+                {(q.options || []).map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type={q.answer_type === "NUMBER" ? "number" : "text"}
+                value={answers[q.id] || ""}
+                disabled={!editable}
+                onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
+                className="compact-input"
+              />
+            )}
+          </div>
+        ))}
+      </div>
+
+      <ErrorText error={error} />
+
+      {msg && <div style={{ color: "#16a34a", fontWeight: 600, fontSize: "0.8rem", marginTop: "0.3rem" }}>✓ {msg}</div>}
+
+      {editable && (
+        <div style={{ marginTop: "0.5rem", display: "flex", alignItems: "center", gap: "10px" }}>
+          <button
+            className="btn btn-primary"
+            onClick={save}
+            disabled={!allAnswered}
+            style={{ padding: "0.3rem 0.75rem", fontSize: "0.8rem" }}
+          >
+            Save Answers
+          </button>
+          {!allAnswered && (
+            <span style={{ fontSize: "0.75rem", color: "#e11d48" }}>
+              * Answer all mandatory questions to save
+            </span>
           )}
-        </Field>
-      ))}
-      <ErrorText error={error} />
-      {msg && <div className="success-text">{msg}</div>}
-      <button className="btn btn-primary" onClick={save}>Save Answers</button>
-    </Card>
+        </div>
+      )}
+    </div>
   );
 }
 
-function ComplianceChecklist({ proposalId }) {
-  const [items, setItems] = useState([]);
-  const [error, setError] = useState(null);
-
-  const load = useCallback(() => {
-    complianceApi.forProposal(proposalId).then((r) => setItems(r.data.items)).catch(setError);
-  }, [proposalId]);
-
-  useEffect(() => load(), [load]);
-
-  if (items.length === 0) return null;
-
-  async function confirm(item, confirmed, remarks, file) {
-    const fd = new FormData();
-    fd.append("proposal", proposalId);
-    fd.append("item", item.id);
-    fd.append("is_confirmed", confirmed);
-    fd.append("remarks", remarks || "");
-    if (file) fd.append("document", file);
-    try {
-      await complianceApi.saveValidation(fd, item.validation?.id);
-      load();
-    } catch (err) {
-      setError(err);
-    }
-  }
-
-  return (
-    <Card title="Compliance Checklist (Sec 16.1)">
-      <ErrorText error={error} />
-      <table className="table">
-        <thead>
-          <tr><th>Item</th><th>Responsible</th><th>Status</th><th>Confirm</th></tr>
-        </thead>
-        <tbody>
-          {items.map((it) => (
-            <ComplianceRow key={it.id} item={it} onConfirm={confirm} />
-          ))}
-        </tbody>
-      </table>
-    </Card>
-  );
-}
-
-function ComplianceRow({ item, onConfirm }) {
-  const [remarks, setRemarks] = useState(item.validation?.remarks || "");
+function Documents({ proposal, actions = [], onUploaded, onDownload }) {
   const [file, setFile] = useState(null);
-  const confirmed = item.validation?.is_confirmed;
-  return (
-    <tr>
-      <td>
-        <strong>{item.title}</strong>
-        <div className="muted small">{item.category_display}</div>
-      </td>
-      <td>{item.responsible_display}</td>
-      <td>
-        {confirmed ? (
-          <span className="badge badge-success">Confirmed</span>
-        ) : (
-          <span className="badge badge-muted">Pending</span>
-        )}
-      </td>
-      <td>
-        <input
-          className="inline-input"
-          placeholder="Remarks"
-          value={remarks}
-          onChange={(e) => setRemarks(e.target.value)}
-        />
-        {item.requires_document && (
-          <input type="file" onChange={(e) => setFile(e.target.files[0])} />
-        )}
-        <button
-          className="btn btn-light btn-sm"
-          onClick={() => onConfirm(item, !confirmed, remarks, file)}
-        >
-          {confirmed ? "Unconfirm" : "Confirm"}
-        </button>
-      </td>
-    </tr>
-  );
-}
-
-function Documents({ proposal, onUploaded }) {
-  const [file, setFile] = useState(null);
+  const editable = Array.isArray(actions) && actions.length > 0;
+  const fileInputRef = useRef(null);
   const [docType, setDocType] = useState("");
+  const [documentsTypes, setDocumentsTypes] = useState([]);
   const [error, setError] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const { user, isAdmin } = useAuth();
+  const [deletingIds, setDeletingIds] = useState([]);
+
+  useEffect(() => {
+    mastersApi
+      .documentsTypes({ is_active: true })
+      .then((r) => setDocumentsTypes(r.data.results || r.data || []))
+      .catch(() => {});
+  }, []);
 
   async function upload() {
-    if (!file) return;
+    setError(null);
+    if (!file) return setError({ detail: "Select a file to upload." });
+    if (!docType) return setError({ detail: "Select a document type." });
+
     const fd = new FormData();
     fd.append("proposal", proposal.id);
     fd.append("file", file);
     fd.append("doc_type", docType);
+
+    setUploading(true);
     try {
       await proposalsApi.uploadDocument(fd);
       setFile(null);
       setDocType("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
       onUploaded();
     } catch (err) {
       setError(err);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function deleteDocument(docId) {
+    setError(null);
+    const result = await Swal.fire({
+      title: "Delete document?",
+      text: "Are you sure you want to delete this document? This action cannot be undone.",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Yes, delete it",
+      cancelButtonText: "Cancel",
+    });
+    if (!result.isConfirmed) return;
+    setDeletingIds((prev) => [...prev, docId]);
+    try {
+      await proposalsApi.deleteDocument(docId);
+      Swal.fire({ icon: "success", title: "Deleted", timer: 1200, showConfirmButton: false });
+      if (onUploaded) onUploaded();
+    } catch (err) {
+      setError(err);
+      const msg = (err && (err.response?.data?.detail || err.message)) || "Failed to delete document";
+      Swal.fire({ icon: "error", title: "Failed", text: msg });
+    } finally {
+      setDeletingIds((prev) => prev.filter((x) => x !== docId));
     }
   }
 
   return (
-    <Card title="Documents">
-      <div className="btn-row">
-        <input type="file" onChange={(e) => setFile(e.target.files[0])} />
-        <input placeholder="Document type" value={docType} onChange={(e) => setDocType(e.target.value)} />
-        <button className="btn btn-primary btn-sm" onClick={upload}>Upload</button>
-      </div>
+    <div>
+      {editable && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "6px",
+            alignItems: "center",
+            padding: "0.45rem 0.65rem",
+            background: "#f8fafc",
+            borderRadius: "6px",
+            marginBottom: "0.5rem",
+            border: "1px dashed #cbd5e1",
+          }}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            onChange={(e) => setFile(e.target.files[0])}
+            style={{ fontSize: "0.78rem" }}
+          />
+
+          <select
+            value={docType}
+            onChange={(e) => setDocType(e.target.value)}
+            className="compact-input"
+            style={{ width: "auto", minWidth: "160px" }}
+          >
+            <option value="">-- Document Type --</option>
+            {documentsTypes.map((dt) => (
+              <option key={dt.id} value={dt.type}>
+                {dt.type}
+              </option>
+            ))}
+          </select>
+
+          <button
+            className="btn btn-primary"
+            onClick={upload}
+            disabled={!file || !docType || uploading}
+            style={{ padding: "0.28rem 0.65rem", fontSize: "0.78rem" }}
+          >
+            {uploading ? "Uploading..." : "Upload"}
+          </button>
+
+          <div
+            style={{
+              width: "100%",
+              marginTop: "0.35rem",
+              fontSize: "0.74rem",
+              color: "#475569",
+              lineHeight: 1.45,
+            }}
+          >
+            Note: Supporting Documents can be uploaded in .pdf, .doc, .docx, .xls, .xlsx, .png, .jpg, .jpeg, .csv, .eml, .msg formats only. Maximum file size is 2 MB.
+          </div>
+        </div>
+      )}
+
       <ErrorText error={error} />
-      <ul className="doc-list">
+
+      <div style={{ display: "grid", gap: "0.35rem" }}>
         {(proposal.documents || []).map((d) => (
-          <li key={d.id}>
-            <a href={d.file} target="_blank" rel="noreferrer">{d.doc_type || "Document"}</a>
-            <span className="muted small"> — {d.uploaded_by_name}</span>
-          </li>
+          <div
+            key={d.id}
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "0.4rem 0.75rem",
+              background: "#ffffff",
+              border: "1px solid #e2e8f0",
+              borderRadius: "6px",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ fontSize: "1rem" }}>📁</span>
+              <div>
+                <strong style={{ fontSize: "0.84rem", color: "#0f172a", display: "inline-block", marginRight: "8px" }}>
+                  {d.doc_type || "Supporting Document"}
+                </strong>
+                <span style={{ fontSize: "0.72rem", color: "#64748b" }}>
+                  Uploaded by {d.uploaded_by_name || "System"} • {d.created_at ? new Date(d.created_at).toLocaleDateString() : "Recent"}
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: "6px" }}>
+              <button
+                className="btn btn-light btn-sm"
+                onClick={() => onDownload && onDownload(d)}
+                style={{ padding: "0.2rem 0.5rem", fontSize: "0.75rem" }}
+              >
+                Download
+              </button>
+              {(isAdmin() || (editable && user && d.uploaded_by === user.id)) && (
+                <button
+                  className="btn btn-danger btn-sm"
+                  onClick={() => deleteDocument(d.id)}
+                  disabled={deletingIds.includes(d.id)}
+                  style={{ padding: "0.2rem 0.5rem", fontSize: "0.75rem" }}
+                >
+                  {deletingIds.includes(d.id) ? "Deleting..." : "Delete"}
+                </button>
+              )}
+            </div>
+          </div>
         ))}
-        {(proposal.documents || []).length === 0 && <li className="muted">No documents.</li>}
-      </ul>
-    </Card>
+
+        {(proposal.documents || []).length === 0 && (
+          <div style={{ padding: "0.6rem", textAlign: "center", color: "#94a3b8", fontSize: "0.8rem" }}>
+            No documents uploaded yet.
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
 function DisbursementPanel({ proposal, onDone }) {
+  const getTodayDate = () => {
+    const now = new Date();
+    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+    return local.toISOString().split("T")[0];
+  };
+  const today = getTodayDate();
+
   const [form, setForm] = useState({
-    amount: "", value_date: "", exchange_rate: "1", payment_reference: "", remarks: "",
+    amount: "",
+    value_date: today,
+    exchange_rate: "",
+    payment_reference: "",
+    remarks: "",
   });
+
   const [error, setError] = useState(null);
-  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  const set = (k) => (e) =>
+    setForm({
+      ...form,
+      [k]: e.target.value,
+    });
+
+  // When value_date changes, fetch exchange rate for the proposal currency
+  useEffect(() => {
+    const date = form.value_date;
+    const from = proposal.currency_code;
+
+    if (!date || !from) return;
+    // Convert YYYY-MM-DD (input date) to YYYYMMDD required by provider
+    const providerDate = String(date).replace(/-/g, "");
+    if (!/^\d{8}$/.test(providerDate)) return;
+
+    let cancelled = false;
+
+    mastersApi
+      .exchangeRate(providerDate, from, "INR")
+      .then((r) => {
+        if (cancelled) return;
+        const rate = r.data?.rate;
+        if (rate !== undefined && rate !== null) {
+          setForm((prev) => ({ ...prev, exchange_rate: String(rate) }));
+        }
+      })
+      .catch(() => {
+        // ignore errors silently; frontend keeps field blank when rate not available
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [form.value_date, proposal.currency_code]);
 
   async function submit() {
     setError(null);
+
+    const amt = Number(form.amount || 0);
+    const already = Number(proposal.total_disbursed || 0);
+    const allowed = Number(proposal.amount || 0);
+    const currencyId = proposal.currency;
+
+    if (!amt || amt <= 0) {
+      return setError("Enter a valid disbursement amount greater than 0.");
+    }
+    if (!form.value_date) {
+      return setError("Select a Disbursement date before recording disbursement.");
+    }
+    if (form.value_date > today) {
+      return setError("Disbursement date must be today or a past date.");
+    }
+    if (!currencyId) {
+      return setError("Proposal currency is missing. Please refresh and try again.");
+    }
+    if (already + amt > allowed) {
+      return setError(
+        `Disbursement exceeds proposal amount. Available: ${proposal.currency_code} ${money(allowed - already)}`
+      );
+    }
+
     try {
-      await proposalsApi.disburse(proposal.id, { ...form, currency: proposal.currency });
-      setForm({ amount: "", value_date: "", exchange_rate: "1", payment_reference: "", remarks: "" });
+      await proposalsApi.disburse(proposal.id, {
+        ...form,
+        currency: currencyId,
+      });
+
+      setForm({
+        amount: "",
+        value_date: getTodayDate(),
+        exchange_rate: "1",
+        payment_reference: "",
+        remarks: "",
+      });
+
       onDone();
     } catch (err) {
       setError(err);
@@ -403,34 +1134,102 @@ function DisbursementPanel({ proposal, onDone }) {
   }
 
   return (
-    <Card title="Record Disbursement">
-      <div className="form-grid">
-        <Field label="Amount"><input type="number" step="0.01" value={form.amount} onChange={set("amount")} /></Field>
-        <Field label="Value Date"><input type="date" value={form.value_date} onChange={set("value_date")} /></Field>
-        <Field label="Exchange Rate"><input type="number" step="0.000001" value={form.exchange_rate} onChange={set("exchange_rate")} /></Field>
-        <Field label="Payment Reference"><input value={form.payment_reference} onChange={set("payment_reference")} /></Field>
-      </div>
-      <ErrorText error={error} />
-      <button className="btn btn-primary" onClick={submit}>Record Disbursement</button>
+    <div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+          gap: "0.5rem",
+          marginBottom: "0.5rem",
+        }}
+      >
+        <div className="compact-field">
+          <label>Amount</label>
+          <input
+            type="number"
+            step="0.01"
+            value={form.amount}
+            onChange={set("amount")}
+            className="compact-input"
+          />
+        </div>
 
-      <table className="table" style={{ marginTop: 16 }}>
-        <thead>
-          <tr><th>Amount</th><th>Currency</th><th>Value Date</th><th>Reference</th></tr>
-        </thead>
-        <tbody>
-          {(proposal.disbursements || []).map((d) => (
-            <tr key={d.id}>
-              <td>{money(d.amount)}</td>
-              <td>{d.currency_code}</td>
-              <td>{d.value_date}</td>
-              <td>{d.payment_reference}</td>
+        <div className="compact-field">
+          <label>Disbursement Date</label>
+          <input
+            type="date"
+            max={today}
+            value={form.value_date}
+            onChange={set("value_date")}
+            className="compact-input"
+          />
+        </div>
+
+        <div className="compact-field">
+          <label>Exchange Rate</label>
+          <input
+            type="text"
+            value={formatRate(form.exchange_rate, "")}
+            readOnly
+            placeholder="Fetched from API"
+            className="compact-input"
+          />
+        </div>
+
+        <div className="compact-field">
+          <label>Payment Reference</label>
+          <input
+            value={form.payment_reference}
+            onChange={set("payment_reference")}
+            className="compact-input"
+          />
+        </div>
+      </div>
+
+      <ErrorText error={error} />
+
+      <div style={{ marginBottom: "0.75rem" }}>
+        <button
+          className="btn btn-primary"
+          onClick={submit}
+          style={{ padding: "0.3rem 0.75rem", fontSize: "0.8rem" }}
+        >
+          Record Disbursement
+        </button>
+      </div>
+
+      <div className="table-wrapper">
+        <table className="table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
+          <thead>
+            <tr style={{ background: "#f8fafc", textAlign: "left" }}>
+              <th style={{ padding: "5px 8px" }}>Amount</th>
+              <th style={{ padding: "5px 8px" }}>Currency</th>
+              <th style={{ padding: "5px 8px" }}>Exchange Rate</th>
+              <th style={{ padding: "5px 8px" }}>Disbursement Date</th>
+              <th style={{ padding: "5px 8px" }}>Payment Reference</th>
             </tr>
-          ))}
-          {(proposal.disbursements || []).length === 0 && (
-            <tr><td colSpan={4} className="muted center">No disbursements yet.</td></tr>
-          )}
-        </tbody>
-      </table>
-    </Card>
+          </thead>
+          <tbody>
+            {(proposal.disbursements || []).map((d) => (
+              <tr key={d.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                <td style={{ padding: "5px 8px", fontWeight: 600 }}>{money(d.amount)}</td>
+                <td style={{ padding: "5px 8px" }}>{d.currency_code}</td>
+                <td style={{ padding: "5px 8px" }}>{formatRate(d.exchange_rate)}</td>
+                <td style={{ padding: "5px 8px" }}>{d.value_date}</td>
+                <td style={{ padding: "5px 8px" }}>{d.payment_reference}</td>
+              </tr>
+            ))}
+
+            {(proposal.disbursements || []).length === 0 && (
+              <tr>
+                <td colSpan={5} style={{ textAlign: "center", padding: "0.6rem", color: "#94a3b8" }}>
+                  No disbursements recorded yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
