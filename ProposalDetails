@@ -797,23 +797,80 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
   const [answers, setAnswers] = useState({});
   const [error, setError] = useState(null);
   const [msg, setMsg] = useState("");
+
+  const [subQuestionNotice, setSubQuestionNotice] = useState(null);
+  const subQuestionNoticeTimer = useRef(null);
+
   const editable = Array.isArray(actions) && actions.length > 0;
 
   const isYesAnswer = (value) =>
     String(value || "")
       .trim()
       .toLowerCase() === "yes";
+
   const isQuestionVisible = (question, answerMap) => {
     if (!question.parent_question) return true;
     return isYesAnswer(answerMap[question.parent_question]);
   };
+
+  const showSubQuestionNotice = (parentQuestionId) => {
+    const childQuestion = questions.find(
+      (q) => String(q.parent_question) === String(parentQuestionId),
+    );
+    if (!childQuestion) return;
+    if (subQuestionNoticeTimer.current) {
+      clearTimeout(subQuestionNoticeTimer.current);
+    }
+    setSubQuestionNotice(childQuestion.id);
+    subQuestionNoticeTimer.current = setTimeout(() => {
+      setSubQuestionNotice(null);
+    }, 3500);
+  };
+
   const visibleQuestions = questions.filter((q) =>
     isQuestionVisible(q, answers),
   );
 
+  /*
+   * Keep child/sub questions immediately after their parent question.
+   * This is important because the API may return all parent questions
+   * first and child questions later.
+   */
+
+  const orderedVisibleQuestions = [];
+
+  const addQuestionWithChildren = (question) => {
+    if (isQuestionVisible(question, answers)) {
+      orderedVisibleQuestions.push(question);
+    }
+
+    const children = questions.filter(
+      (child) =>
+        String(child.parent_question) === String(question.id) &&
+        isQuestionVisible(child, answers),
+    );
+
+    children.forEach(addQuestionWithChildren);
+  };
+
+  /* Start with main/top-level questions */
+  questions.filter((q) => !q.parent_question).forEach(addQuestionWithChildren);
+
+  /*
+   * Safety fallback:
+   * If the API contains a question whose parent is missing,
+   * don't lose it from the questionnaire.
+   */
+
+  visibleQuestions.forEach((question) => {
+    if (!orderedVisibleQuestions.some((q) => q.id === question.id)) {
+      orderedVisibleQuestions.push(question);
+    }
+  });
+
   const allAnswered =
-    visibleQuestions.length > 0 &&
-    visibleQuestions.every((q) => {
+    orderedVisibleQuestions.length > 0 &&
+    orderedVisibleQuestions.every((q) => {
       if (!q.is_mandatory) return true;
       const a = answers[q.id];
       return a !== undefined && a !== null && String(a).trim() !== "";
@@ -850,7 +907,7 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
     try {
       await questionnaireApi.bulkAnswer({
         proposal: proposalId,
-        answers: visibleQuestions.map((q) => ({
+        answers: orderedVisibleQuestions.map((q) => ({
           question: Number(q.id),
           answer_text: answers[q.id] || "",
         })),
@@ -867,12 +924,26 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
   return (
     <div>
       <div className="questionnaire-fields-grid">
-        {visibleQuestions.map((q) => (
-          <div key={q.id} className="compact-field">
+        {orderedVisibleQuestions.map((q) => (
+          <div
+            key={q.id}
+            className={`compact-field ${
+              q.parent_question ? "questionnaire-sub-question" : ""
+            }`}
+          >
             <label>
               {q.text}
               {q.is_mandatory ? " *" : ""}
             </label>
+            {q.parent_question && subQuestionNotice === q.id && (
+              <div className="sub-question-suggestion">
+                <span className="sub-question-suggestion-icon">💡</span>
+                <span>
+                  This is a sub-question based on your previous
+                  <strong> Yes </strong> selection.
+                </span>
+              </div>
+            )}
             {q.answer_type === "BOOLEAN" ? (
               <select
                 value={answers[q.id] || ""}
@@ -880,7 +951,10 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
                 onChange={(e) => {
                   const nextValue = e.target.value;
                   setAnswers((prev) => {
-                    const next = { ...prev, [q.id]: nextValue };
+                    const next = {
+                      ...prev,
+                      [q.id]: nextValue,
+                    };
                     questions.forEach((item) => {
                       if (
                         item.parent_question &&
@@ -891,6 +965,14 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
                     });
                     return next;
                   });
+                  if (isYesAnswer(nextValue)) {
+                    showSubQuestionNotice(q.id);
+                  } else {
+                    setSubQuestionNotice(null);
+                    if (subQuestionNoticeTimer.current) {
+                      clearTimeout(subQuestionNoticeTimer.current);
+                    }
+                  }
                 }}
                 className="compact-input"
               >
