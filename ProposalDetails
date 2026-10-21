@@ -574,9 +574,11 @@ function WorkflowPanel({ proposal, actions = [], onDone, readOnly = false }) {
       ])
         .then(([cfoResponse, mdCeoResponse]) => {
           const cfoUsers = cfoResponse.data.results || cfoResponse.data || [];
-          const mdCeoUsers = mdCeoResponse.data.results || mdCeoResponse.data || [];
+          const mdCeoUsers =
+            mdCeoResponse.data.results || mdCeoResponse.data || [];
           const allApprovers = [...cfoUsers, ...mdCeoUsers].filter(
-            (user, index, users) => users.findIndex((item) => item.id === user.id) === index,
+            (user, index, users) =>
+              users.findIndex((item) => item.id === user.id) === index,
           );
           setGroupCfos(allApprovers);
           setMdCeoUsers(allApprovers);
@@ -622,7 +624,9 @@ function WorkflowPanel({ proposal, actions = [], onDone, readOnly = false }) {
     if (needsAssignee && action === "APPROVE") {
       const nextSelectionErrors = {
         groupCfo: selectedGroupCfo ? "" : "Please select a Level 1 approver.",
-        mdCeo: selectedMdCeo.length ? "" : "Please select at least one Level 2 approver.",
+        mdCeo: selectedMdCeo.length
+          ? ""
+          : "Please select at least one Level 2 approver.",
       };
       const hasSelectionError = Boolean(
         nextSelectionErrors.groupCfo || nextSelectionErrors.mdCeo,
@@ -725,7 +729,9 @@ function WorkflowPanel({ proposal, actions = [], onDone, readOnly = false }) {
               onChange={(e) => {
                 const val = e.target.value;
                 setSelectedGroupCfo(val);
-                setSelectedMdCeo((current) => current.filter((id) => String(id) !== String(val)));
+                setSelectedMdCeo((current) =>
+                  current.filter((id) => String(id) !== String(val)),
+                );
                 setSelectionErrors((prev) => ({
                   ...prev,
                   groupCfo: val ? "" : prev.groupCfo,
@@ -748,14 +754,16 @@ function WorkflowPanel({ proposal, actions = [], onDone, readOnly = false }) {
           </div>
           <div className="compact-field">
             <label>
-              Level 2 Approver{" "}
-              <span style={{ color: "#e11d48" }}>*</span>
+              Level 2 Approver <span style={{ color: "#e11d48" }}>*</span>
             </label>
             <select
               value={selectedMdCeo}
               multiple
               onChange={(e) => {
-                const values = Array.from(e.target.selectedOptions, (option) => option.value);
+                const values = Array.from(
+                  e.target.selectedOptions,
+                  (option) => option.value,
+                );
                 setSelectedMdCeo(values);
                 setSelectionErrors((prev) => ({
                   ...prev,
@@ -768,9 +776,9 @@ function WorkflowPanel({ proposal, actions = [], onDone, readOnly = false }) {
               {mdCeoUsers
                 .filter((u) => String(u.id) !== String(selectedGroupCfo))
                 .map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.full_name} ({u.role_code})
-                </option>
+                  <option key={u.id} value={u.id}>
+                    {u.full_name} ({u.role_code})
+                  </option>
                 ))}
             </select>
             {selectionErrors.mdCeo && (
@@ -1432,12 +1440,14 @@ function DisbursementPanel({ proposal, onDone }) {
     setBusy(true);
     try {
       await proposalsApi.saveTranches(proposal.id, {
-        tranches: tranches.map(({ amount, value_date, exchange_rate, payment_reference }) => ({
-          amount,
-          value_date,
-          exchange_rate: exchange_rate || "1",
-          payment_reference: payment_reference || "",
-        })),
+        tranches: tranches.map(
+          ({ amount, value_date, exchange_rate, payment_reference }) => ({
+            amount,
+            value_date,
+            exchange_rate: exchange_rate || "1",
+            payment_reference: payment_reference || "",
+          }),
+        ),
       });
       onDone();
     } catch (err) {
@@ -1522,7 +1532,9 @@ function DisbursementPanel({ proposal, onDone }) {
           return;
         }
         if (t.value_date > today) {
-          setError(`Disbursement date must be today or a past date for tranche ${i + 1}.`);
+          setError(
+            `Disbursement date must be today or a past date for tranche ${i + 1}.`,
+          );
           setBusy(false);
           return;
         }
@@ -1583,7 +1595,9 @@ function DisbursementPanel({ proposal, onDone }) {
           <label>Is Tranches Available?</label>
           <select
             value={tranchesAvailable ? "Yes" : "No"}
-            onChange={(e) => configureTrancheMode(String(e.target.value) === "Yes")}
+            onChange={(e) =>
+              configureTrancheMode(String(e.target.value) === "Yes")
+            }
             disabled={busy || tranchesLocked}
             className="compact-input"
           >
@@ -1594,7 +1608,11 @@ function DisbursementPanel({ proposal, onDone }) {
 
         {tranchesAvailable && !tranchesLocked && (
           <div className="compact-field" style={{ alignSelf: "end" }}>
-            <button className="btn btn-light" onClick={addTranche} type="button">
+            <button
+              className="btn btn-light"
+              onClick={addTranche}
+              type="button"
+            >
               + Add Tranche
             </button>
           </div>
@@ -1622,13 +1640,14 @@ function DisbursementPanel({ proposal, onDone }) {
               alignItems: "end",
               paddingBottom: idx < tranches.length - 1 ? "0.5rem" : 0,
               marginBottom: idx < tranches.length - 1 ? "0.5rem" : 0,
-              borderBottom: idx < tranches.length - 1 ? "1px solid #e2e8f0" : "none",
+              borderBottom:
+                idx < tranches.length - 1 ? "1px solid #e2e8f0" : "none",
             }}
           >
             {tranchesAvailable && (
               <div className="compact-field">
-              <label>Tranche {idx + 1}</label>
-              <span style={{ display: "block", height: "2.15rem" }} />
+                <label>Tranche {idx + 1}</label>
+                <span style={{ display: "block", height: "2.15rem" }} />
               </div>
             )}
 
@@ -1639,7 +1658,11 @@ function DisbursementPanel({ proposal, onDone }) {
                 step="0.01"
                 value={t.amount}
                 onChange={updateTranche(idx, "amount")}
-                disabled={singleDisbursementRecorded || (tranchesLocked && (t.status === "DISBURSED" || !editingRows[t.id]))}
+                disabled={
+                  singleDisbursementRecorded ||
+                  (tranchesLocked &&
+                    (t.status === "DISBURSED" || !editingRows[t.id]))
+                }
                 className="compact-input"
               />
             </div>
@@ -1650,7 +1673,11 @@ function DisbursementPanel({ proposal, onDone }) {
                 type="date"
                 value={t.value_date}
                 onChange={updateTranche(idx, "value_date")}
-                disabled={singleDisbursementRecorded || (tranchesLocked && (t.status === "DISBURSED" || !editingRows[t.id]))}
+                disabled={
+                  singleDisbursementRecorded ||
+                  (tranchesLocked &&
+                    (t.status === "DISBURSED" || !editingRows[t.id]))
+                }
                 className="compact-input"
               />
             </div>
@@ -1661,7 +1688,11 @@ function DisbursementPanel({ proposal, onDone }) {
                 type="text"
                 value={t.exchange_rate}
                 onChange={updateTranche(idx, "exchange_rate")}
-                disabled={singleDisbursementRecorded || (tranchesLocked && (t.status === "DISBURSED" || !editingRows[t.id]))}
+                disabled={
+                  singleDisbursementRecorded ||
+                  (tranchesLocked &&
+                    (t.status === "DISBURSED" || !editingRows[t.id]))
+                }
                 placeholder="Exchange Rate"
                 className="compact-input"
               />
@@ -1672,7 +1703,11 @@ function DisbursementPanel({ proposal, onDone }) {
               <input
                 value={t.payment_reference}
                 onChange={updateTranche(idx, "payment_reference")}
-                disabled={singleDisbursementRecorded || (tranchesLocked && (t.status === "DISBURSED" || !editingRows[t.id]))}
+                disabled={
+                  singleDisbursementRecorded ||
+                  (tranchesLocked &&
+                    (t.status === "DISBURSED" || !editingRows[t.id]))
+                }
                 className="compact-input"
               />
             </div>
@@ -1690,17 +1725,40 @@ function DisbursementPanel({ proposal, onDone }) {
             )}
 
             {tranchesLocked && t.status === "DRAFT" && (
-              <div style={{ display: "flex", gap: "6px", gridColumn: 6, gridRow: 1 }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "6px",
+                  gridColumn: 6,
+                  gridRow: 1,
+                }}
+              >
                 {editingRows[t.id] ? (
-                  <button className="btn btn-primary btn-sm" type="button" onClick={() => updateSavedTranche(idx)} disabled={busy}>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    type="button"
+                    onClick={() => updateSavedTranche(idx)}
+                    disabled={busy}
+                  >
                     Save
                   </button>
                 ) : (
-                  <button className="btn btn-light btn-sm" type="button" onClick={() => setEditingRows((prev) => ({ ...prev, [t.id]: true }))}>
+                  <button
+                    className="btn btn-light btn-sm"
+                    type="button"
+                    onClick={() =>
+                      setEditingRows((prev) => ({ ...prev, [t.id]: true }))
+                    }
+                  >
                     Update
                   </button>
                 )}
-                <button className="btn btn-primary btn-sm" type="button" onClick={() => disburseSavedTranche(t)} disabled={busy || editingRows[t.id]}>
+                <button
+                  className="btn btn-primary btn-sm"
+                  type="button"
+                  onClick={() => disburseSavedTranche(t)}
+                  disabled={busy || editingRows[t.id]}
+                >
                   Disbursed
                 </button>
               </div>
@@ -1713,19 +1771,36 @@ function DisbursementPanel({ proposal, onDone }) {
 
       <div style={{ marginBottom: "0.75rem" }}>
         {!tranchesAvailable && !singleDisbursementRecorded && (
-          <button className="btn btn-primary" onClick={submit} disabled={busy} style={{ padding: "0.3rem 0.75rem", fontSize: "0.8rem" }}>
+          <button
+            className="btn btn-primary"
+            onClick={submit}
+            disabled={busy}
+            style={{ padding: "0.3rem 0.75rem", fontSize: "0.8rem" }}
+          >
             {busy ? "Processing..." : "Submit Disbursement"}
           </button>
         )}
         {tranchesAvailable && !tranchesLocked && (
-          <button className="btn btn-primary" onClick={saveTranches} disabled={busy} style={{ padding: "0.3rem 0.75rem", fontSize: "0.8rem" }}>
+          <button
+            className="btn btn-primary"
+            onClick={saveTranches}
+            disabled={busy}
+            style={{ padding: "0.3rem 0.75rem", fontSize: "0.8rem" }}
+          >
             {busy ? "Saving..." : "Save Tranches"}
           </button>
         )}
       </div>
 
       <div className="table-wrapper">
-        <table className="table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
+        <table
+          className="table"
+          style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            fontSize: "0.8rem",
+          }}
+        >
           <thead>
             <tr style={{ background: "#f8fafc", textAlign: "left" }}>
               <th style={{ padding: "5px 8px" }}>Amount</th>
@@ -1738,9 +1813,13 @@ function DisbursementPanel({ proposal, onDone }) {
           <tbody>
             {(proposal.disbursements || []).map((d) => (
               <tr key={d.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                <td style={{ padding: "5px 8px", fontWeight: 600 }}>{money(d.amount)}</td>
+                <td style={{ padding: "5px 8px", fontWeight: 600 }}>
+                  {money(d.amount)}
+                </td>
                 <td style={{ padding: "5px 8px" }}>{d.currency_code}</td>
-                <td style={{ padding: "5px 8px" }}>{formatRate(d.exchange_rate)}</td>
+                <td style={{ padding: "5px 8px" }}>
+                  {formatRate(d.exchange_rate)}
+                </td>
                 <td style={{ padding: "5px 8px" }}>{d.value_date}</td>
                 <td style={{ padding: "5px 8px" }}>{d.payment_reference}</td>
               </tr>
@@ -1748,7 +1827,14 @@ function DisbursementPanel({ proposal, onDone }) {
 
             {(proposal.disbursements || []).length === 0 && (
               <tr>
-                <td colSpan={5} style={{ textAlign: "center", padding: "0.6rem", color: "#94a3b8" }}>
+                <td
+                  colSpan={5}
+                  style={{
+                    textAlign: "center",
+                    padding: "0.6rem",
+                    color: "#94a3b8",
+                  }}
+                >
                   No disbursements recorded yet.
                 </td>
               </tr>
