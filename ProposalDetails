@@ -989,17 +989,27 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
         </div>
       )}
       <div className="questionnaire-fields-grid">
-        {orderedVisibleQuestions.map((q) => (
+        {orderedVisibleQuestions.map((q, index) => (
           <div
             key={q.id}
-            className={`compact-field ${
-              q.parent_question ? "questionnaire-sub-question" : ""
+            className={`questionnaire-question-card ${
+              q.parent_question ? "questionnaire-sub-question-card" : ""
             }`}
           >
-            <label>
+            <div className="questionnaire-card-heading">
+              <span className="questionnaire-card-label">
+                {q.parent_question ? "SUB-QUESTION" : "QUESTION"}
+              </span>
+              {q.is_mandatory && (
+                <span className="questionnaire-required">Required</span>
+              )}
+            </div>
+            <div className="questionnaire-question-text">
               {q.text}
-              {q.is_mandatory ? " *" : ""}
-            </label>
+              {q.is_mandatory && (
+                <span className="questionnaire-required-star"> *</span>
+              )}
+            </div>
             {q.parent_question && subQuestionNotice === q.id && (
               <div className="sub-question-suggestion">
                 <span className="sub-question-suggestion-icon">💡</span>
@@ -1009,79 +1019,83 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
                 </span>
               </div>
             )}
-            {q.answer_type === "BOOLEAN" ? (
-              <select
-                value={answers[q.id] || ""}
-                disabled={!editable}
-                onChange={(e) => {
-                  const nextValue = e.target.value;
-                  setAnswers((prev) => {
-                    const next = {
-                      ...prev,
-                      [q.id]: nextValue,
-                    };
-                    questions.forEach((item) => {
-                      if (
-                        item.parent_question &&
-                        !isQuestionVisible(item, next)
-                      ) {
-                        next[item.id] = "";
-                      }
+            <div className="questionnaire-answer-section">
+              <label className="questionnaire-detail-label">Answer</label>
+              {q.answer_type === "BOOLEAN" ? (
+                <select
+                  value={answers[q.id] || ""}
+                  disabled={!editable}
+                  onChange={(e) => {
+                    const nextValue = e.target.value;
+                    setAnswers((prev) => {
+                      const next = { ...prev, [q.id]: nextValue };
+                      questions.forEach((item) => {
+                        if (
+                          item.parent_question &&
+                          !isQuestionVisible(item, next)
+                        ) {
+                          next[item.id] = "";
+                        }
+                      });
+                      return next;
                     });
-                    return next;
-                  });
-                  if (isYesAnswer(nextValue)) {
-                    showSubQuestionNotice(q.id);
-                  } else {
-                    setSubQuestionNotice(null);
-                    if (subQuestionNoticeTimer.current) {
-                      clearTimeout(subQuestionNoticeTimer.current);
+                    if (isYesAnswer(nextValue)) {
+                      showSubQuestionNotice(q.id);
+                    } else {
+                      setSubQuestionNotice(null);
+                      if (subQuestionNoticeTimer.current) {
+                        clearTimeout(subQuestionNoticeTimer.current);
+                      }
                     }
+                  }}
+                  className="compact-input"
+                >
+                  <option value="">Select option</option>
+                  <option value="Yes">Yes</option>
+                  <option value="No">No</option>
+                  <option value="N/A">N/A</option>
+                </select>
+              ) : q.answer_type === "CHOICE" ? (
+                <select
+                  value={answers[q.id] || ""}
+                  disabled={!editable}
+                  onChange={(e) =>
+                    setAnswers({ ...answers, [q.id]: e.target.value })
                   }
-                }}
-                className="compact-input"
-              >
-                <option value="">Select option</option>
-                <option value="Yes">Yes</option>
-                <option value="No">No</option>
-                <option value="N/A">N/A</option>
-              </select>
-            ) : q.answer_type === "CHOICE" ? (
-              <select
-                value={answers[q.id] || ""}
-                disabled={!editable}
-                onChange={(e) =>
-                  setAnswers({ ...answers, [q.id]: e.target.value })
-                }
-                className="compact-input"
-              >
-                <option value="">Select</option>
-                {(q.options || []).map((o) => (
-                  <option key={o} value={o}>
-                    {o}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                type={q.answer_type === "NUMBER" ? "number" : "text"}
-                value={answers[q.id] || ""}
-                disabled={!editable}
-                onChange={(e) =>
-                  setAnswers({ ...answers, [q.id]: e.target.value })
-                }
-                className="compact-input"
-              />
-            )}
-            <div className="questionnaire-remark-group">
-              <label className="questionnaire-remark-label">
-                Remark (optional, maximum 500 characters)
+                  className="compact-input"
+                >
+                  <option value="">Select</option>
+                  {(q.options || []).map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type={q.answer_type === "NUMBER" ? "number" : "text"}
+                  value={answers[q.id] || ""}
+                  disabled={!editable}
+                  onChange={(e) =>
+                    setAnswers({ ...answers, [q.id]: e.target.value })
+                  }
+                  className="compact-input"
+                />
+              )}
+            </div>
+            <div className="questionnaire-remark-card">
+              <label className="questionnaire-detail-label">
+                Remark
+                <span className="questionnaire-optional-label">
+                  Optional · Maximum 500 characters
+                </span>
               </label>
               <input
                 type="text"
                 value={remarks[q.id] || ""}
                 disabled={!editable}
                 maxLength={500}
+                placeholder="Add a remark for this question..."
                 onChange={(e) =>
                   setRemarks({ ...remarks, [q.id]: e.target.value })
                 }
