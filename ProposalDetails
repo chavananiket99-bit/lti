@@ -155,7 +155,7 @@ function DisbursementList({ proposal }) {
 export default function ProposalDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { hasRole } = useAuth();
+  const { hasRole, isAdmin } = useAuth();
 
   const [proposal, setProposal] = useState(null);
   const [actions, setActions] = useState([]);
@@ -301,7 +301,8 @@ export default function ProposalDetail() {
   }
 
   const docCount = proposal.documents?.length || 0;
-  const pendingActionsCount = actions?.length || 0;
+  const adminReadOnly = isAdmin();
+  const permittedActions = adminReadOnly ? [] : actions;
   const canEditDraftProposal =
     hasRole("GROUP_ENTITY_USER") && proposal.current_state === "DRAFT";
 
@@ -473,7 +474,7 @@ export default function ProposalDetail() {
         <Questionnaire
           proposalId={id}
           state={proposal.current_state}
-          actions={actions}
+          actions={permittedActions}
           onSaved={load}
         />
       </AccordionSection>
@@ -488,7 +489,7 @@ export default function ProposalDetail() {
       >
         <Documents
           proposal={proposal}
-          actions={actions}
+          actions={permittedActions}
           onUploaded={load}
           onDownload={downloadDocument}
         />
@@ -535,22 +536,23 @@ export default function ProposalDetail() {
       >
         <WorkflowPanel
           proposal={proposal}
-          actions={actions}
+          actions={permittedActions}
           history={history}
           onDone={load}
+          readOnly={adminReadOnly}
         />
       </AccordionSection>
     </div>
   );
 }
 
-function WorkflowPanel({ proposal, actions = [], onDone }) {
+function WorkflowPanel({ proposal, actions = [], onDone, readOnly = false }) {
   const [remarks, setRemarks] = useState("");
   const [groupCfos, setGroupCfos] = useState([]);
   const [mdCeoUsers, setMdCeoUsers] = useState([]);
   const [otherApproverUsers, setOtherApproverUsers] = useState([]);
   const [selectedGroupCfo, setSelectedGroupCfo] = useState("");
-  const [selectedMdCeo, setSelectedMdCeo] = useState("");
+  const [selectedMdCeo, setSelectedMdCeo] = useState([]);
   const [selectedOtherApprover, setSelectedOtherApprover] = useState("");
   const [selectionErrors, setSelectionErrors] = useState({
     groupCfo: "",
@@ -566,15 +568,23 @@ function WorkflowPanel({ proposal, actions = [], onDone }) {
       // Load users for each fixed approver role, scoped to the proposal's
       // company so only approvers assigned to that company are selectable.
       const company = proposal.company;
-      usersApi
-        .approvers("GROUP_CFO", company)
-        .then((r) => setGroupCfos(r.data.results || r.data || []))
-        .catch(() => setGroupCfos([]));
-
-      usersApi
-        .approvers("GROUP_MD_CEO", company)
-        .then((r) => setMdCeoUsers(r.data.results || r.data || []))
-        .catch(() => setMdCeoUsers([]));
+      Promise.all([
+        usersApi.approvers("GROUP_CFO", company),
+        usersApi.approvers("GROUP_MD_CEO", company),
+      ])
+        .then(([cfoResponse, mdCeoResponse]) => {
+          const cfoUsers = cfoResponse.data.results || cfoResponse.data || [];
+          const mdCeoUsers = mdCeoResponse.data.results || mdCeoResponse.data || [];
+          const allApprovers = [...cfoUsers, ...mdCeoUsers].filter(
+            (user, index, users) => users.findIndex((item) => item.id === user.id) === index,
+          );
+          setGroupCfos(allApprovers);
+          setMdCeoUsers(allApprovers);
+        })
+        .catch(() => {
+          setGroupCfos([]);
+          setMdCeoUsers([]);
+        });
 
       usersApi
         .approvers("OTHER_APPROVER", company)
@@ -598,6 +608,8 @@ function WorkflowPanel({ proposal, actions = [], onDone }) {
   };
 
   async function run(action) {
+    if (readOnly) return;
+
     // Remarks are mandatory for REJECT, APPROVE and COMPLETE (backend enforced)
     if (
       (action === "REJECT" || action === "APPROVE" || action === "COMPLETE") &&
@@ -609,8 +621,8 @@ function WorkflowPanel({ proposal, actions = [], onDone }) {
 
     if (needsAssignee && action === "APPROVE") {
       const nextSelectionErrors = {
-        groupCfo: selectedGroupCfo ? "" : "Please select Group CFO.",
-        mdCeo: selectedMdCeo ? "" : "Please select Group MD & CEO.",
+        groupCfo: selectedGroupCfo ? "" : "Please select a Level 1 approver.",
+        mdCeo: selectedMdCeo.length ? "" : "Please select at least one Level 2 approver.",
       };
       const hasSelectionError = Boolean(
         nextSelectionErrors.groupCfo || nextSelectionErrors.mdCeo,
@@ -627,6 +639,18 @@ function WorkflowPanel({ proposal, actions = [], onDone }) {
       }
     }
 
+    if (action === "COMPLETE") {
+      const result = await Swal.fire({
+        title: "Complete disbursement?",
+        text: "This will complete the request and cannot be undone.",
+        icon: "warning",
+        showCancelButton: true,
+        confirmButtonText: "Yes, complete it",
+        cancelButtonText: "Cancel",
+      });
+      if (!result.isConfirmed) return;
+    }
+
     setBusy(true);
     setError(null);
 
@@ -635,6 +659,7 @@ function WorkflowPanel({ proposal, actions = [], onDone }) {
 
       if (needsAssignee && action === "APPROVE") {
         payload.assignee = selectedGroupCfo;
+        payload.level_2_assignees = selectedMdCeo;
       }
 
       const endpoint = action.toLowerCase();
@@ -693,13 +718,14 @@ function WorkflowPanel({ proposal, actions = [], onDone }) {
         <div className="workflow-assignee-grid">
           <div className="compact-field">
             <label>
-              Group CFO (GROUP_CFO) <span style={{ color: "#e11d48" }}>*</span>
+              Level 1 Approver <span style={{ color: "#e11d48" }}>*</span>
             </label>
             <select
               value={selectedGroupCfo}
               onChange={(e) => {
                 const val = e.target.value;
                 setSelectedGroupCfo(val);
+                setSelectedMdCeo((current) => current.filter((id) => String(id) !== String(val)));
                 setSelectionErrors((prev) => ({
                   ...prev,
                   groupCfo: val ? "" : prev.groupCfo,
@@ -707,7 +733,7 @@ function WorkflowPanel({ proposal, actions = [], onDone }) {
               }}
               className="compact-input"
             >
-              <option value="">Select Group CFO</option>
+              <option value="">Select Level 1 Approver</option>
               {groupCfos.map((u) => (
                 <option key={u.id} value={u.id}>
                   {u.full_name} ({u.role_code})
@@ -722,27 +748,30 @@ function WorkflowPanel({ proposal, actions = [], onDone }) {
           </div>
           <div className="compact-field">
             <label>
-              Group MD & CEO (GROUP_MD_CEO){" "}
+              Level 2 Approver{" "}
               <span style={{ color: "#e11d48" }}>*</span>
             </label>
             <select
               value={selectedMdCeo}
+              multiple
               onChange={(e) => {
-                const val = e.target.value;
-                setSelectedMdCeo(val);
+                const values = Array.from(e.target.selectedOptions, (option) => option.value);
+                setSelectedMdCeo(values);
                 setSelectionErrors((prev) => ({
                   ...prev,
-                  mdCeo: val ? "" : prev.mdCeo,
+                  mdCeo: values.length ? "" : prev.mdCeo,
                 }));
               }}
               className="compact-input"
             >
-              <option value="">Select MD & CEO</option>
-              {mdCeoUsers.map((u) => (
+              <option value="">Select Level 2 Approver</option>
+              {mdCeoUsers
+                .filter((u) => String(u.id) !== String(selectedGroupCfo))
+                .map((u) => (
                 <option key={u.id} value={u.id}>
                   {u.full_name} ({u.role_code})
                 </option>
-              ))}
+                ))}
             </select>
             {selectionErrors.mdCeo && (
               <div className="workflow-field-error">
@@ -795,13 +824,17 @@ function WorkflowPanel({ proposal, actions = [], onDone }) {
 function Questionnaire({ proposalId, actions = [], state, onSaved }) {
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
+  const [remarks, setRemarks] = useState({});
+  const [questionnaireStageLabel, setQuestionnaireStageLabel] = useState("");
+  const [isHistorical, setIsHistorical] = useState(false);
   const [error, setError] = useState(null);
   const [msg, setMsg] = useState("");
 
   const [subQuestionNotice, setSubQuestionNotice] = useState(null);
   const subQuestionNoticeTimer = useRef(null);
 
-  const editable = Array.isArray(actions) && actions.length > 0;
+  const editable =
+    !isHistorical && Array.isArray(actions) && actions.length > 0;
 
   const isYesAnswer = (value) =>
     String(value || "")
@@ -876,16 +909,28 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
       return a !== undefined && a !== null && String(a).trim() !== "";
     });
 
+  const remarksValid = orderedVisibleQuestions.every((q) => {
+    const remark = String(remarks[q.id] || "").trim();
+    return remark.length <= 500;
+  });
+
   const load = useCallback(() => {
     questionnaireApi
       .forProposal(proposalId)
       .then((r) => {
         const qs = r.data.questions || [];
         setQuestions(qs);
+        setQuestionnaireStageLabel(r.data.questionnaire_stage_display || "");
+        setIsHistorical(Boolean(r.data.is_historical));
 
         const map = {};
-        qs.forEach((q) => (map[q.id] = q.answer_text || ""));
+        const remarkMap = {};
+        qs.forEach((q) => {
+          map[q.id] = q.answer_text || "";
+          remarkMap[q.id] = q.remark || "";
+        });
         setAnswers(map);
+        setRemarks(remarkMap);
       })
       .catch(setError);
   }, [proposalId]);
@@ -910,6 +955,7 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
         answers: orderedVisibleQuestions.map((q) => ({
           question: Number(q.id),
           answer_text: answers[q.id] || "",
+          remark: remarks[q.id] || "",
         })),
       });
 
@@ -923,6 +969,17 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
 
   return (
     <div>
+      {isHistorical && questionnaireStageLabel && (
+        <div
+          style={{
+            color: "#64748b",
+            fontSize: "0.8rem",
+            marginBottom: "0.5rem",
+          }}
+        >
+          Completed questionnaire: {questionnaireStageLabel}
+        </div>
+      )}
       <div className="questionnaire-fields-grid">
         {orderedVisibleQuestions.map((q) => (
           <div
@@ -979,6 +1036,7 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
                 <option value="">Select option</option>
                 <option value="Yes">Yes</option>
                 <option value="No">No</option>
+                <option value="N/A">N/A</option>
               </select>
             ) : q.answer_type === "CHOICE" ? (
               <select
@@ -1007,6 +1065,21 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
                 className="compact-input"
               />
             )}
+            <div className="questionnaire-remark-group">
+              <label className="questionnaire-remark-label">
+                Remark (optional, maximum 500 characters)
+              </label>
+              <input
+                type="text"
+                value={remarks[q.id] || ""}
+                disabled={!editable}
+                maxLength={500}
+                onChange={(e) =>
+                  setRemarks({ ...remarks, [q.id]: e.target.value })
+                }
+                className="compact-input questionnaire-remark"
+              />
+            </div>
           </div>
         ))}
       </div>
@@ -1038,7 +1111,7 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
           <button
             className="btn btn-primary"
             onClick={save}
-            disabled={!allAnswered}
+            disabled={!allAnswered || !remarksValid}
             style={{ padding: "0.3rem 0.75rem", fontSize: "0.8rem" }}
           >
             Save Answers
@@ -1046,6 +1119,11 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
           {!allAnswered && (
             <span style={{ fontSize: "0.75rem", color: "#e11d48" }}>
               * Answer all mandatory questions to save
+            </span>
+          )}
+          {allAnswered && !remarksValid && (
+            <span style={{ fontSize: "0.75rem", color: "#e11d48" }}>
+              * Each remark must be 500 characters or fewer
             </span>
           )}
         </div>
@@ -1062,7 +1140,7 @@ function Documents({ proposal, actions = [], onUploaded, onDownload }) {
   const [documentsTypes, setDocumentsTypes] = useState([]);
   const [error, setError] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const { user, isAdmin } = useAuth();
+  const { user } = useAuth();
   const [deletingIds, setDeletingIds] = useState([]);
 
   useEffect(() => {
@@ -1214,8 +1292,7 @@ function Documents({ proposal, actions = [], onUploaded, onDownload }) {
               >
                 Download
               </button>
-              {(isAdmin() ||
-                (editable && user && d.uploaded_by === user.id)) && (
+              {editable && user && d.uploaded_by === user.id && (
                 <button
                   className="btn btn-danger btn-sm"
                   onClick={() => deleteDocument(d.id)}
@@ -1254,176 +1331,401 @@ function DisbursementPanel({ proposal, onDone }) {
   };
   const today = getTodayDate();
 
-  const [form, setForm] = useState({
+  const emptyTranche = () => ({
     amount: "",
     value_date: today,
-    exchange_rate: "",
+    exchange_rate: "1",
     payment_reference: "",
-    remarks: "",
   });
 
+  const [tranches, setTranches] = useState([emptyTranche()]);
+  const [tranchesAvailable, setTranchesAvailable] = useState(
+    Boolean(proposal.tranches_available),
+  );
+  const [editingRows, setEditingRows] = useState({});
+  const tranchesLocked = Boolean(proposal.tranches_locked);
   const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
 
-  const set = (k) => (e) =>
-    setForm({
-      ...form,
-      [k]: e.target.value,
-    });
-
-  // When value_date changes, fetch exchange rate for the proposal currency
   useEffect(() => {
-    const date = form.value_date;
-    const from = proposal.currency_code;
+    setTranchesAvailable(Boolean(proposal.tranches_available));
+    if (proposal.tranches_locked) {
+      setTranches(
+        (proposal.disbursements || []).map((row) => ({
+          id: row.id,
+          amount: row.amount || "",
+          value_date: row.value_date || today,
+          exchange_rate: row.exchange_rate || "",
+          payment_reference: row.payment_reference || "",
+          status: row.status,
+        })),
+      );
+    } else {
+      setTranches([emptyTranche()]);
+    }
+    setEditingRows({});
+  }, [proposal]);
 
-    if (!date || !from) return;
-    // Convert YYYY-MM-DD (input date) to YYYYMMDD required by provider
-    const providerDate = String(date).replace(/-/g, "");
-    if (!/^\d{8}$/.test(providerDate)) return;
+  const updateTranche = (index, key) => (e) => {
+    const val = e?.target ? e.target.value : e;
+    setTranches((prev) => {
+      const next = prev.map((t, i) => (i === index ? { ...t, [key]: val } : t));
+      return next;
+    });
+  };
 
-    let cancelled = false;
+  const addTranche = () => {
+    if (!tranchesLocked) setTranches((p) => [...p, emptyTranche()]);
+  };
+  const removeTranche = (index) =>
+    setTranches((p) =>
+      !tranchesLocked && index > 0 && p.length > 1
+        ? p.filter((_, i) => i !== index)
+        : p,
+    );
 
-    mastersApi
-      .exchangeRate(providerDate, from, "INR")
-      .then((r) => {
-        if (cancelled) return;
-        const rate = r.data?.rate;
-        if (rate !== undefined && rate !== null) {
-          setForm((prev) => ({ ...prev, exchange_rate: String(rate) }));
-        }
-      })
-      .catch(() => {
-        // ignore errors silently; frontend keeps field blank when rate not available
-      });
+  const already = Number(proposal.total_disbursed || 0);
+  const allowed = Number(proposal.amount || 0);
+  const remaining = Math.max(0, allowed - already);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [form.value_date, proposal.currency_code]);
-
-  async function submit() {
+  async function configureTrancheMode(enabled) {
     setError(null);
-
-    const amt = Number(form.amount || 0);
-    const already = Number(proposal.total_disbursed || 0);
-    const allowed = Number(proposal.amount || 0);
-    const currencyId = proposal.currency;
-
-    if (!amt || amt <= 0) {
-      return setError("Enter a valid disbursement amount greater than 0.");
-    }
-    if (!form.value_date) {
-      return setError(
-        "Select a Disbursement date before recording disbursement.",
-      );
-    }
-    if (form.value_date > today) {
-      return setError("Disbursement date must be today or a past date.");
-    }
-    if (!currencyId) {
-      return setError(
-        "Proposal currency is missing. Please refresh and try again.",
-      );
-    }
-    if (already + amt > allowed) {
-      return setError(
-        `Disbursement exceeds proposal amount. Available: ${proposal.currency_code} ${money(allowed - already)}`,
-      );
-    }
-
+    setBusy(true);
     try {
-      await proposalsApi.disburse(proposal.id, {
-        ...form,
-        currency: currencyId,
+      await proposalsApi.configureTranches(proposal.id, {
+        tranches_available: enabled,
       });
+      setTranchesAvailable(enabled);
+      setTranches([emptyTranche()]);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
 
-      setForm({
-        amount: "",
-        value_date: getTodayDate(),
-        exchange_rate: "1",
-        payment_reference: "",
-        remarks: "",
+  async function saveTranches() {
+    setError(null);
+    const trancheTotal = tranches.reduce(
+      (sum, tranche) => sum + Number(tranche.amount || 0),
+      0,
+    );
+    if (already + trancheTotal > allowed) {
+      setError(
+        `Total tranche amount cannot exceed the sanctioned amount. Available: ${proposal.currency_code} ${money(
+          remaining,
+        )}`,
+      );
+      return;
+    }
+
+    const result = await Swal.fire({
+      title: "Save tranches?",
+      text: "This will save the tranche details as draft entries. No new tranches can be added afterwards.",
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonText: "Yes, save tranches",
+      cancelButtonText: "Cancel",
+    });
+    if (!result.isConfirmed) return;
+
+    setBusy(true);
+    try {
+      await proposalsApi.saveTranches(proposal.id, {
+        tranches: tranches.map(({ amount, value_date, exchange_rate, payment_reference }) => ({
+          amount,
+          value_date,
+          exchange_rate: exchange_rate || "1",
+          payment_reference: payment_reference || "",
+        })),
       });
-
       onDone();
     } catch (err) {
       setError(err);
+    } finally {
+      setBusy(false);
     }
   }
+
+  async function updateSavedTranche(index) {
+    const row = tranches[index];
+    setError(null);
+    setBusy(true);
+    try {
+      await proposalsApi.updateTranche(row.id, {
+        amount: row.amount,
+        value_date: row.value_date,
+        exchange_rate: row.exchange_rate || "1",
+        payment_reference: row.payment_reference || "",
+      });
+      setEditingRows((prev) => ({ ...prev, [row.id]: false }));
+      onDone();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disburseSavedTranche(row) {
+    setError(null);
+    const result = await Swal.fire({
+      title: "Disburse tranche?",
+      text: "This will record the tranche as disbursed and cannot be undone.",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Yes, disburse it",
+      cancelButtonText: "Cancel",
+    });
+    if (!result.isConfirmed) return;
+
+    setBusy(true);
+    try {
+      await proposalsApi.disburseTranche(row.id);
+      onDone();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit() {
+    setError(null);
+    if (busy) return;
+    setBusy(true);
+
+    try {
+      // Basic front-end validation
+      if (!tranches || tranches.length === 0) {
+        setError("No disbursement entries to record.");
+        setBusy(false);
+        return;
+      }
+
+      // When tranches are not enabled, consider only the first entry
+      const entries = tranchesAvailable ? tranches : [tranches[0]];
+
+      const sum = entries.reduce((s, t) => s + Number(t.amount || 0), 0);
+      if (!sum || sum <= 0) {
+        setError("Enter a valid disbursement amount greater than 0.");
+        setBusy(false);
+        return;
+      }
+
+      // Validate each entry
+      for (let i = 0; i < entries.length; i++) {
+        const t = entries[i];
+        if (!t.value_date) {
+          setError(`Select a disbursement date for tranche ${i + 1}.`);
+          setBusy(false);
+          return;
+        }
+        if (t.value_date > today) {
+          setError(`Disbursement date must be today or a past date for tranche ${i + 1}.`);
+          setBusy(false);
+          return;
+        }
+        if (!t.amount || Number(t.amount) <= 0) {
+          setError(`Enter a valid amount for tranche ${i + 1}.`);
+          setBusy(false);
+          return;
+        }
+      }
+
+      if (sum > remaining) {
+        setError(
+          `Total disbursement exceeds proposal amount. Available: ${proposal.currency_code} ${money(
+            remaining,
+          )}`,
+        );
+        setBusy(false);
+        return;
+      }
+
+      // Submit each disbursement sequentially; stop on first failure
+      for (let i = 0; i < entries.length; i++) {
+        const t = entries[i];
+        await proposalsApi.disburse(proposal.id, {
+          amount: t.amount,
+          value_date: t.value_date,
+          exchange_rate: t.exchange_rate || "1",
+          payment_reference: t.payment_reference || "",
+          currency: proposal.currency,
+        });
+      }
+
+      // Refresh the payment state; completion is handled from the Workflow panel.
+      setTranches([emptyTranche()]);
+      onDone();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const singleDisbursementRecorded =
+    !tranchesAvailable &&
+    (proposal.disbursements || []).some((row) => row.status === "DISBURSED");
 
   return (
     <div>
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
           gap: "0.5rem",
           marginBottom: "0.5rem",
         }}
       >
         <div className="compact-field">
-          <label>Amount</label>
-          <input
-            type="number"
-            step="0.01"
-            value={form.amount}
-            onChange={set("amount")}
+          <label>Is Tranches Available?</label>
+          <select
+            value={tranchesAvailable ? "Yes" : "No"}
+            onChange={(e) => configureTrancheMode(String(e.target.value) === "Yes")}
+            disabled={busy || tranchesLocked}
             className="compact-input"
-          />
+          >
+            <option value="No">No</option>
+            <option value="Yes">Yes</option>
+          </select>
         </div>
 
-        <div className="compact-field">
-          <label>Disbursement Date</label>
-          <input
-            type="date"
-            max={today}
-            value={form.value_date}
-            onChange={set("value_date")}
-            className="compact-input"
-          />
-        </div>
+        {tranchesAvailable && !tranchesLocked && (
+          <div className="compact-field" style={{ alignSelf: "end" }}>
+            <button className="btn btn-light" onClick={addTranche} type="button">
+              + Add Tranche
+            </button>
+          </div>
+        )}
+      </div>
 
-        <div className="compact-field">
-          <label>Exchange Rate</label>
-          <input
-            type="text"
-            value={formatRate(form.exchange_rate, "")}
-            readOnly
-            placeholder="Fetched from API"
-            className="compact-input"
-          />
-        </div>
+      <div
+        style={{
+          border: "1px solid #e2e8f0",
+          padding: "0.6rem",
+          borderRadius: 6,
+          marginBottom: "0.5rem",
+          background: "#ffffff",
+        }}
+      >
+        {tranches.map((t, idx) => (
+          <div
+            key={idx}
+            style={{
+              display: "grid",
+              gridTemplateColumns: tranchesAvailable
+                ? "minmax(90px, 0.6fr) repeat(4, minmax(140px, 1fr)) auto"
+                : "repeat(4, minmax(140px, 1fr))",
+              gap: "0.5rem",
+              alignItems: "end",
+              paddingBottom: idx < tranches.length - 1 ? "0.5rem" : 0,
+              marginBottom: idx < tranches.length - 1 ? "0.5rem" : 0,
+              borderBottom: idx < tranches.length - 1 ? "1px solid #e2e8f0" : "none",
+            }}
+          >
+            {tranchesAvailable && (
+              <div className="compact-field">
+              <label>Tranche {idx + 1}</label>
+              <span style={{ display: "block", height: "2.15rem" }} />
+              </div>
+            )}
 
-        <div className="compact-field">
-          <label>Payment Reference</label>
-          <input
-            value={form.payment_reference}
-            onChange={set("payment_reference")}
-            className="compact-input"
-          />
-        </div>
+            <div className="compact-field">
+              <label>Amount</label>
+              <input
+                type="number"
+                step="0.01"
+                value={t.amount}
+                onChange={updateTranche(idx, "amount")}
+                disabled={singleDisbursementRecorded || (tranchesLocked && (t.status === "DISBURSED" || !editingRows[t.id]))}
+                className="compact-input"
+              />
+            </div>
+
+            <div className="compact-field">
+              <label>Disbursement Date</label>
+              <input
+                type="date"
+                value={t.value_date}
+                onChange={updateTranche(idx, "value_date")}
+                disabled={singleDisbursementRecorded || (tranchesLocked && (t.status === "DISBURSED" || !editingRows[t.id]))}
+                className="compact-input"
+              />
+            </div>
+
+            <div className="compact-field">
+              <label>Exchange Rate</label>
+              <input
+                type="text"
+                value={t.exchange_rate}
+                onChange={updateTranche(idx, "exchange_rate")}
+                disabled={singleDisbursementRecorded || (tranchesLocked && (t.status === "DISBURSED" || !editingRows[t.id]))}
+                placeholder="Exchange Rate"
+                className="compact-input"
+              />
+            </div>
+
+            <div className="compact-field">
+              <label>Payment Reference</label>
+              <input
+                value={t.payment_reference}
+                onChange={updateTranche(idx, "payment_reference")}
+                disabled={singleDisbursementRecorded || (tranchesLocked && (t.status === "DISBURSED" || !editingRows[t.id]))}
+                className="compact-input"
+              />
+            </div>
+
+            {tranchesAvailable && !tranchesLocked && idx > 0 && (
+              <button
+                className="btn btn-danger btn-sm"
+                onClick={() => removeTranche(idx)}
+                type="button"
+                title={`Remove tranche ${idx + 1}`}
+                style={{ gridColumn: 6, gridRow: 1, marginBottom: "0.05rem" }}
+              >
+                -
+              </button>
+            )}
+
+            {tranchesLocked && t.status === "DRAFT" && (
+              <div style={{ display: "flex", gap: "6px", gridColumn: 6, gridRow: 1 }}>
+                {editingRows[t.id] ? (
+                  <button className="btn btn-primary btn-sm" type="button" onClick={() => updateSavedTranche(idx)} disabled={busy}>
+                    Save
+                  </button>
+                ) : (
+                  <button className="btn btn-light btn-sm" type="button" onClick={() => setEditingRows((prev) => ({ ...prev, [t.id]: true }))}>
+                    Update
+                  </button>
+                )}
+                <button className="btn btn-primary btn-sm" type="button" onClick={() => disburseSavedTranche(t)} disabled={busy || editingRows[t.id]}>
+                  Disbursed
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
 
       <ErrorText error={error} />
 
       <div style={{ marginBottom: "0.75rem" }}>
-        <button
-          className="btn btn-primary"
-          onClick={submit}
-          style={{ padding: "0.3rem 0.75rem", fontSize: "0.8rem" }}
-        >
-          Record Disbursement
-        </button>
+        {!tranchesAvailable && !singleDisbursementRecorded && (
+          <button className="btn btn-primary" onClick={submit} disabled={busy} style={{ padding: "0.3rem 0.75rem", fontSize: "0.8rem" }}>
+            {busy ? "Processing..." : "Submit Disbursement"}
+          </button>
+        )}
+        {tranchesAvailable && !tranchesLocked && (
+          <button className="btn btn-primary" onClick={saveTranches} disabled={busy} style={{ padding: "0.3rem 0.75rem", fontSize: "0.8rem" }}>
+            {busy ? "Saving..." : "Save Tranches"}
+          </button>
+        )}
       </div>
 
       <div className="table-wrapper">
-        <table
-          className="table"
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            fontSize: "0.8rem",
-          }}
-        >
+        <table className="table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
           <thead>
             <tr style={{ background: "#f8fafc", textAlign: "left" }}>
               <th style={{ padding: "5px 8px" }}>Amount</th>
@@ -1436,13 +1738,9 @@ function DisbursementPanel({ proposal, onDone }) {
           <tbody>
             {(proposal.disbursements || []).map((d) => (
               <tr key={d.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                <td style={{ padding: "5px 8px", fontWeight: 600 }}>
-                  {money(d.amount)}
-                </td>
+                <td style={{ padding: "5px 8px", fontWeight: 600 }}>{money(d.amount)}</td>
                 <td style={{ padding: "5px 8px" }}>{d.currency_code}</td>
-                <td style={{ padding: "5px 8px" }}>
-                  {formatRate(d.exchange_rate)}
-                </td>
+                <td style={{ padding: "5px 8px" }}>{formatRate(d.exchange_rate)}</td>
                 <td style={{ padding: "5px 8px" }}>{d.value_date}</td>
                 <td style={{ padding: "5px 8px" }}>{d.payment_reference}</td>
               </tr>
@@ -1450,14 +1748,7 @@ function DisbursementPanel({ proposal, onDone }) {
 
             {(proposal.disbursements || []).length === 0 && (
               <tr>
-                <td
-                  colSpan={5}
-                  style={{
-                    textAlign: "center",
-                    padding: "0.6rem",
-                    color: "#94a3b8",
-                  }}
-                >
+                <td colSpan={5} style={{ textAlign: "center", padding: "0.6rem", color: "#94a3b8" }}>
                   No disbursements recorded yet.
                 </td>
               </tr>
