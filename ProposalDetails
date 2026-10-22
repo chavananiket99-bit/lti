@@ -841,6 +841,15 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
   const [subQuestionNotice, setSubQuestionNotice] = useState(null);
   const subQuestionNoticeTimer = useRef(null);
 
+  // Clear the toast timer when the questionnaire unmounts.
+  useEffect(() => {
+    return () => {
+      if (subQuestionNoticeTimer.current) {
+        clearTimeout(subQuestionNoticeTimer.current);
+      }
+    };
+  }, []);
+
   const editable =
     !isHistorical && Array.isArray(actions) && actions.length > 0;
 
@@ -849,22 +858,42 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
       .trim()
       .toLowerCase() === "yes";
 
+  const getParentQuestionId = (question) => {
+    const parent = question.parent_question;
+    if (parent == null || parent === "") return null;
+    return typeof parent === "object" ? parent.id : parent;
+  };
+
   const isQuestionVisible = (question, answerMap) => {
-    if (!question.parent_question) return true;
-    return isYesAnswer(answerMap[question.parent_question]);
+    const parentId = getParentQuestionId(question);
+    if (parentId == null) return true;
+    return isYesAnswer(answerMap[parentId]);
   };
 
   const showSubQuestionNotice = (parentQuestionId) => {
-    const childQuestion = questions.find(
-      (q) => String(q.parent_question) === String(parentQuestionId),
-    );
-    if (!childQuestion) return;
+    // APIs may return parent_question as either an ID or a nested object.
+    const childQuestion = questions.find((q) => {
+      const parentId =
+        q.parent_question && typeof q.parent_question === "object"
+          ? q.parent_question.id
+          : q.parent_question;
+      return parentId != null && String(parentId) === String(parentQuestionId);
+    });
+
+    if (!childQuestion) {
+      setSubQuestionNotice(null);
+      return;
+    }
+
     if (subQuestionNoticeTimer.current) {
       clearTimeout(subQuestionNoticeTimer.current);
     }
-    setSubQuestionNotice(childQuestion.id);
+    // Store the parent ID; the toast is rendered globally so card/container
+    // overflow and positioning styles cannot hide it.
+    setSubQuestionNotice(String(parentQuestionId));
     subQuestionNoticeTimer.current = setTimeout(() => {
       setSubQuestionNotice(null);
+      subQuestionNoticeTimer.current = null;
     }, 3500);
   };
 
@@ -887,7 +916,7 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
 
     const children = questions.filter(
       (child) =>
-        String(child.parent_question) === String(question.id) &&
+        String(getParentQuestionId(child)) === String(question.id) &&
         isQuestionVisible(child, answers),
     );
 
@@ -895,7 +924,9 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
   };
 
   /* Start with main/top-level questions */
-  questions.filter((q) => !q.parent_question).forEach(addQuestionWithChildren);
+  questions
+    .filter((q) => getParentQuestionId(q) == null)
+    .forEach(addQuestionWithChildren);
 
   /*
    * Safety fallback:
@@ -1004,21 +1035,34 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
                 <span className="questionnaire-required">Required</span>
               )}
             </div>
+            {getParentQuestionId(q) != null &&
+              subQuestionNotice === String(getParentQuestionId(q)) && (
+                <div
+                  className="sub-question-suggestion"
+                  role="status"
+                  aria-live="polite"
+                  style={{
+                    margin: "0 0 12px",
+                  }}
+                >
+                  <span
+                    className="sub-question-suggestion-icon"
+                    aria-hidden="true"
+                  >
+                    💡
+                  </span>
+                  <span>
+                    This follow-up question is shown because you selected{" "}
+                    <strong>Yes</strong>.
+                  </span>
+                </div>
+              )}
             <div className="questionnaire-question-text">
               {q.text}
               {q.is_mandatory && (
                 <span className="questionnaire-required-star"> *</span>
               )}
             </div>
-            {q.parent_question && subQuestionNotice === q.id && (
-              <div className="sub-question-suggestion">
-                <span className="sub-question-suggestion-icon">💡</span>
-                <span>
-                  This is a sub-question based on your previous
-                  <strong> Yes </strong> selection.
-                </span>
-              </div>
-            )}
             <div className="questionnaire-answer-section">
               <label className="questionnaire-detail-label">Answer</label>
               {q.answer_type === "BOOLEAN" ? (
@@ -1090,8 +1134,7 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
                   Optional · Maximum 500 characters
                 </span>
               </label>
-              <input
-                type="text"
+              <textarea
                 value={remarks[q.id] || ""}
                 disabled={!editable}
                 maxLength={500}
@@ -1100,6 +1143,7 @@ function Questionnaire({ proposalId, actions = [], state, onSaved }) {
                   setRemarks({ ...remarks, [q.id]: e.target.value })
                 }
                 className="compact-input questionnaire-remark"
+                rows={3}
               />
             </div>
           </div>
